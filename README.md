@@ -58,6 +58,13 @@ A dark-themed, mobile-first music player built with Vue 3, Quasar, and TypeScrip
 ### PWA
 - Service worker registered for offline support
 
+## Planned Features
+
+- [ ] Spotify integration — import liked songs and playlists directly from your Spotify account
+- [ ] MusicBrainz + AcoustID — audio fingerprinting to auto-identify untagged tracks and fetch full ID3 metadata (title, artist, album, year, genre) from MusicBrainz
+- [ ] Google SSO — sign in with Google to sync preferences and playlists across devices
+- [ ] Ultra lightweight build — aggressive tree-shaking and lazy loading to keep the bundle minimal for low-end devices and slow connections
+
 ## Tech Stack
 
 - Vue 3 + `<script setup>` + TypeScript

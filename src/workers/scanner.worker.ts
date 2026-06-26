@@ -1,4 +1,4 @@
-import { parseBuffer } from 'music-metadata-browser';
+import { parseBuffer } from 'music-metadata';
 import { openDB, type IDBPDatabase } from 'idb';
 import type { S3Config, LocalSource, Track, MusicPlayerDB } from 'src/types/models';
 

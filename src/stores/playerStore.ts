@@ -59,6 +59,7 @@ export const usePlayerStore = defineStore('player', {
     currentTrackId: null as string | null,
     isPlaying: false,
     isLooping: false,
+    isShuffling: false,
     queue: [] as string[],
     currentTime: 0,
     duration: 0,
@@ -74,6 +75,9 @@ export const usePlayerStore = defineStore('player', {
       let url: string;
       if (track.sourceTag === 's3' && track.s3Key) {
         url = await s3Client.getPresignedUrl(track.s3Key);
+      } else if (track.sourceTag === 'server' && track.serverPath) {
+        const { backend } = await import('src/services/backend');
+        url = backend.streamUrl(track.serverPath);
       } else if (track.sourceTag === 'local' && track.localPath) {
         const resolved = await resolveLocalUrl(track.localPath);
         if (!resolved) return; // handle not available (permission revoked)
@@ -112,6 +116,10 @@ export const usePlayerStore = defineStore('player', {
       this.isLooping = !this.isLooping;
     },
 
+    toggleShuffle(): void {
+      this.isShuffling = !this.isShuffling;
+    },
+
     async next(): Promise<void> {
       // If looping single track, restart current
       if (this.isLooping && this.currentTrackId) {
@@ -121,6 +129,17 @@ export const usePlayerStore = defineStore('player', {
         _startInterval(this);
         return;
       }
+
+      // Shuffle: pick a random track from queue (excluding current)
+      if (this.isShuffling && this.queue.length > 1) {
+        const candidates = this.queue.filter((id) => id !== this.currentTrackId);
+        const randomId = candidates[Math.floor(Math.random() * candidates.length)];
+        if (randomId) {
+          await this.play(randomId);
+          return;
+        }
+      }
+
       const idx = this.currentTrackId ? this.queue.indexOf(this.currentTrackId) : -1;
       const nextIdx = idx + 1;
       if (nextIdx < this.queue.length) {

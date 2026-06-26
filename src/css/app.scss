@@ -1,1 +1,7 @@
 // app global css in SCSS form
+
+// System font stack — avoids downloading Roboto (~80KB)
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Helvetica Neue',
+    Arial, sans-serif;
+}

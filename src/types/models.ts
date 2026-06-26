@@ -6,10 +6,11 @@ export interface Track {
   artist: string;
   album: string;
   duration: number;
-  sourceTag: 's3' | 'local';
+  sourceTag: 's3' | 'local' | 'server';
   artworkId: string | null;
   s3Key?: string;
   localPath?: string;
+  serverPath?: string;
 }
 
 export interface S3Config {

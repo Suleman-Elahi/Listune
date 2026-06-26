@@ -47,7 +47,7 @@ const audioEngine: AudioEngineInterface = {
 
     _audioContext = new AudioContext();
     _analyserNode = _audioContext.createAnalyser();
-    _analyserNode.fftSize = 2048;
+    _analyserNode.fftSize = 64;
     _analyserNode.smoothingTimeConstant = 0.8;
 
     _sourceNode = _audioContext.createMediaElementSource(audio);

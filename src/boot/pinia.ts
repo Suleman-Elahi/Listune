@@ -2,7 +2,7 @@
 // Requirements: 1.2
 // Explicitly create and install Pinia so stores are available app-wide.
 
-import { defineBoot } from '#q-app/wrappers';
+import { defineBoot } from '@quasar/app-vite';
 import { createPinia } from 'pinia';
 
 export default defineBoot(({ app }) => {

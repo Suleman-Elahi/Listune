@@ -36,6 +36,17 @@
 
     <!-- Req 6.4: Transport buttons -->
     <div class="transport-controls">
+      <!-- Shuffle toggle -->
+      <q-btn
+        flat
+        round
+        icon="shuffle"
+        :color="playerStore.isShuffling ? 'light-green-4' : 'white'"
+        size="sm"
+        class="transport-btn"
+        :class="{ 'shuffle-active': playerStore.isShuffling }"
+        @click="playerStore.toggleShuffle()"
+      />
       <q-btn
         flat
         round
@@ -312,7 +323,8 @@ function onVolumeInput(e: Event): void {
     inset 0 -1px 0 rgba(0, 0, 0, 0.5) !important;
 }
 
-.loop-active {
+.loop-active,
+.shuffle-active {
   background: linear-gradient(180deg, #1a4a1a 0%, #0a2a0a 100%) !important;
   border-color: rgba(170, 255, 0, 0.5) !important;
   box-shadow:

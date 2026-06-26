@@ -71,12 +71,72 @@
           </div>
         </q-tab-panel>
 
-        <!-- Playlists tab: placeholder (Req 7.5) -->
+        <!-- Playlists tab (Req 7.5) -->
         <q-tab-panel name="playlists" class="playlists-panel">
-          <div class="empty-state">
+          <!-- Save current queue as playlist -->
+          <div v-if="playerStore.queue.length > 0" class="save-queue-row">
+            <q-btn
+              flat
+              dense
+              icon="playlist_add"
+              label="Save queue as playlist"
+              color="light-blue-4"
+              size="sm"
+              @click="showSaveDialog = true"
+            />
+          </div>
+
+          <q-virtual-scroll
+            v-if="playlists.length > 0"
+            :items="playlists"
+            :virtual-scroll-item-size="64"
+            style="height: 100%"
+          >
+            <template #default="{ item: pl }">
+              <q-item
+                :key="pl.id"
+                clickable
+                @click="loadPlaylist(pl)"
+              >
+                <q-item-section avatar>
+                  <q-icon name="queue_music" color="white" size="20px" />
+                </q-item-section>
+                <q-item-section>
+                  <q-item-label class="track-label">{{ pl.name }}</q-item-label>
+                  <q-item-label caption class="track-index">
+                    {{ pl.trackIds.length }} tracks
+                  </q-item-label>
+                </q-item-section>
+                <q-item-section side>
+                  <q-btn flat round dense icon="delete_outline" color="grey-5" size="xs" @click.stop="deletePlaylist(pl.id)" />
+                </q-item-section>
+              </q-item>
+            </template>
+          </q-virtual-scroll>
+
+          <div v-else class="empty-state">
             <q-icon name="playlist_play" size="48px" color="grey-6" />
             <p class="text-grey-6">No saved playlists</p>
           </div>
+
+          <!-- Save dialog -->
+          <q-dialog v-model="showSaveDialog" no-focus no-refocus>
+            <q-card dark style="min-width: 260px; background: #1e2230; border-radius: 16px;">
+              <q-card-section>
+                <div style="font-size: 15px; font-weight: 700; color: #fff; margin-bottom: 10px;">Save Queue as Playlist</div>
+                <input
+                  v-model="newPlaylistName"
+                  class="save-input"
+                  placeholder="Playlist name..."
+                  @keyup.enter="saveQueueAsPlaylist"
+                />
+              </q-card-section>
+              <q-card-actions align="right">
+                <q-btn flat label="Cancel" color="grey-5" @click="showSaveDialog = false" />
+                <q-btn unelevated rounded label="Save" color="primary" @click="saveQueueAsPlaylist" />
+              </q-card-actions>
+            </q-card>
+          </q-dialog>
         </q-tab-panel>
       </q-tab-panels>
     </div>
@@ -106,6 +166,53 @@ const activeTab = ref<'queue' | 'playlists'>('queue');
 // Track label cache: trackId → "title - artist"
 const trackLabels = reactive<Record<string, string>>({});
 
+// ── Playlist support ──
+interface Playlist {
+  id: string;
+  name: string;
+  trackIds: string[];
+  createdAt: number;
+}
+
+function loadPlaylists(): Playlist[] {
+  try { return JSON.parse(localStorage.getItem('playlists') || '[]'); } catch { return []; }
+}
+function savePlaylists(pls: Playlist[]): void {
+  localStorage.setItem('playlists', JSON.stringify(pls));
+}
+
+const playlists = ref<Playlist[]>(loadPlaylists());
+const showSaveDialog = ref(false);
+const newPlaylistName = ref('');
+
+function saveQueueAsPlaylist(): void {
+  const name = newPlaylistName.value.trim();
+  if (!name || playerStore.queue.length === 0) return;
+  const pl: Playlist = {
+    id: crypto.randomUUID(),
+    name,
+    trackIds: [...playerStore.queue],
+    createdAt: Date.now(),
+  };
+  playlists.value.unshift(pl);
+  savePlaylists(playlists.value);
+  newPlaylistName.value = '';
+  showSaveDialog.value = false;
+}
+
+function loadPlaylist(pl: Playlist): void {
+  playerStore.setQueue(pl.trackIds);
+  if (pl.trackIds.length > 0) {
+    playerStore.play(pl.trackIds[0]!);
+  }
+  close();
+}
+
+function deletePlaylist(id: string): void {
+  playlists.value = playlists.value.filter((p) => p.id !== id);
+  savePlaylists(playlists.value);
+}
+
 function close(): void {
   emit('update:modelValue', false);
 }
@@ -132,7 +239,7 @@ watch(
   { immediate: true, deep: true },
 );
 
-// Also load labels when drawer opens
+// Also load labels + refresh playlists when drawer opens
 watch(
   () => props.modelValue,
   (open) => {
@@ -140,6 +247,8 @@ watch(
       for (const id of playerStore.queue) {
         void loadTrackLabel(id);
       }
+      // Refresh playlists from localStorage (may have changed from PlaylistsView)
+      playlists.value = loadPlaylists();
     }
   },
 );
@@ -267,5 +376,26 @@ function onTouchEnd(): void {
 .empty-state p {
   margin: 0;
   font-size: 14px;
+}
+
+.save-queue-row {
+  display: flex;
+  justify-content: center;
+  padding: 10px 16px 6px;
+}
+
+.save-input {
+  width: 100%;
+  background: #2a2d3e;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  padding: 10px 14px;
+  color: #fff;
+  font-size: 15px;
+  outline: none;
+}
+
+.save-input::placeholder {
+  color: rgba(255, 255, 255, 0.3);
 }
 </style>

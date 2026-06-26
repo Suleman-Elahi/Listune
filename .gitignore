@@ -1,0 +1,41 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+/dist
+.quasar/
+
+# Quasar cache
+node_modules/.q-cache/
+
+# Environment / secrets
+.env
+server/.env
+*.env.local
+
+# OS files
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# IDE
+.vscode/
+.idea/
+*.iml
+
+# Go build artifacts
+server/listune-server
+server/*.exe
+
+# Logs
+*.log
+npm-debug.log*
+
+# Test coverage
+coverage/
+
+# Lock files (using pnpm)
+package-lock.json
+yarn.lock

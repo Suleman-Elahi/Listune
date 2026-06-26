@@ -1,7 +1,11 @@
 // Configuration for your app
 // https://v2.quasar.dev/quasar-cli-vite/quasar-config-file
 
-import { defineConfig } from '#q-app/wrappers';
+import { defineConfig } from '@quasar/app-vite';
+import { resolve, dirname } from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig((/* ctx */) => {
   return {
@@ -11,23 +15,15 @@ export default defineConfig((/* ctx */) => {
     // app boot file (/src/boot)
     // --> boot files are part of "main.js"
     // https://v2.quasar.dev/quasar-cli-vite/boot-files
-    boot: ['pinia', 'axios'],
+    boot: ['pinia'],
 
     // https://v2.quasar.dev/quasar-cli-vite/quasar-config-file#css
     css: ['app.scss'],
 
     // https://github.com/quasarframework/quasar/tree/dev/extras
     extras: [
-      // 'ionicons-v4',
-      // 'mdi-v7',
-      // 'fontawesome-v6',
-      // 'eva-icons',
-      // 'themify',
-      // 'line-awesome',
-      // 'roboto-font-latin-ext', // this or either 'roboto-font', NEVER both!
-
-      'roboto-font', // optional, you are not bound to it
-      'material-icons', // optional, you are not bound to it
+      // Using system font stack instead of Roboto for smaller bundle
+      'material-icons',
     ],
 
     // Full list of options: https://v2.quasar.dev/quasar-cli-vite/quasar-config-file#build
@@ -46,7 +42,16 @@ export default defineConfig((/* ctx */) => {
       vueRouterMode: 'hash', // available values: 'hash', 'history'
       // vueRouterBase,
       // vueDevtools,
-      // vueOptionsAPI: false,
+      vueOptionsAPI: false, // Disable Options API — app uses <script setup> exclusively
+
+      alias: {
+        src: resolve(__dirname, './src'),
+        pages: resolve(__dirname, './src/pages'),
+        components: resolve(__dirname, './src/components'),
+        layouts: resolve(__dirname, './src/layouts'),
+        stores: resolve(__dirname, './src/stores'),
+        services: resolve(__dirname, './src/services'),
+      },
 
       // rebuildCache: true, // rebuilds Vite/linter/etc cache on startup
 
@@ -134,15 +139,42 @@ export default defineConfig((/* ctx */) => {
 
     // https://v2.quasar.dev/quasar-cli-vite/developing-pwa/configuring-pwa
     pwa: {
-      workboxMode: 'GenerateSW', // 'GenerateSW' or 'InjectManifest'
+      workboxMode: 'GenerateSW',
       // swFilename: 'sw.js',
       // manifestFilename: 'manifest.json',
-      // extendManifestJson (json) {},
-      // useCredentialsForManifestTag: true,
-      // injectPwaMetaTags: false,
-      // extendPWACustomSWConf (esbuildConf) {},
-      // extendGenerateSWOptions (cfg) {},
-      // extendInjectManifestOptions (cfg) {}
+
+      extendGenerateSWOptions(cfg) {
+        // Cache app shell (JS, CSS, HTML, icons) but NOT audio blobs
+        cfg.skipWaiting = true;
+        cfg.clientsClaim = true;
+
+        // Exclude audio/video from precache
+        cfg.navigateFallback = 'index.html';
+        cfg.navigateFallbackDenylist = [/^\/_/, /\/api\//];
+
+        // Runtime caching: never cache audio streams or S3 presigned URLs
+        cfg.runtimeCaching = [
+          {
+            // Cache Google Fonts / icon fonts
+            urlPattern: /^https:\/\/fonts\.(googleapis|gstatic)\.com\//,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'google-fonts',
+              expiration: { maxEntries: 30, maxAgeSeconds: 60 * 60 * 24 * 365 },
+            },
+          },
+          {
+            // Never cache audio files or S3 presigned URLs
+            urlPattern: /\.(mp3|flac|ogg|m4a|wav|aac)(\?.*)?$/i,
+            handler: 'NetworkOnly',
+          },
+          {
+            // Never cache S3 requests (presigned URLs)
+            urlPattern: /X-Amz-Signature/,
+            handler: 'NetworkOnly',
+          },
+        ];
+      },
     },
 
     // Full list of options: https://v2.quasar.dev/quasar-cli-vite/developing-cordova-apps/configuring-cordova

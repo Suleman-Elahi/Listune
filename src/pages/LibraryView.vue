@@ -5,6 +5,38 @@
       <q-btn flat round icon="arrow_back" color="white" size="sm" @click="$router.push('/')" />
       <span class="lib-app-name">Music Player</span>
       <q-btn unelevated rounded label="Import" color="primary" size="sm" class="import-btn" @click="showAddSource = true" />
+      <q-btn
+        v-if="untaggedCount > 0"
+        unelevated
+        rounded
+        :label="isIdentifying ? `Identifying...` : `ID ${untaggedCount} tracks`"
+        color="orange-8"
+        size="sm"
+        class="import-btn"
+        :loading="isIdentifying"
+        @click="identifyUntagged"
+      />
+      <q-btn flat round class="user-avatar-btn">
+        <div class="user-avatar">
+          <img v-if="user?.picture" :src="user.picture" referrerpolicy="no-referrer" />
+          <q-icon v-else name="account_circle" color="grey-4" size="32px" />
+        </div>
+        <q-menu anchor="bottom right" self="top right">
+          <q-list dense dark style="min-width: 180px; background: #1e2230;">
+            <q-item v-if="user">
+              <q-item-section>
+                <q-item-label style="color: #fff; font-size: 13px;">{{ user.name }}</q-item-label>
+                <q-item-label caption style="color: rgba(255,255,255,0.45); font-size: 11px;">{{ user.email }}</q-item-label>
+              </q-item-section>
+            </q-item>
+            <q-separator dark />
+            <q-item clickable v-close-popup @click="logout">
+              <q-item-section avatar><q-icon name="logout" size="18px" color="red-4" /></q-item-section>
+              <q-item-section style="color: #fff;">Log out</q-item-section>
+            </q-item>
+          </q-list>
+        </q-menu>
+      </q-btn>
     </div>
 
     <!-- Search -->
@@ -72,8 +104,59 @@
               <div class="track-artist">{{ track.artist || 'Unknown artist' }}</div>
             </div>
             <span class="track-duration">{{ formatDuration(track.duration) }}</span>
-            <q-btn flat round dense icon="add" color="grey-5" size="xs" @click.stop="enqueueTrack(track.id)" />
-            <q-btn flat round dense icon="more_vert" color="grey-5" size="xs" @click.stop />
+            <q-btn flat round dense icon="add" color="grey-5" size="xs" @click.stop="showTrackMenu($event, track.id)">
+              <q-menu anchor="bottom right" self="top right" class="track-menu">
+                <q-list dense dark style="min-width: 180px; background: #1e2230;">
+                  <q-item clickable v-close-popup @click="enqueueTrack(track.id)">
+                    <q-item-section avatar><q-icon name="queue" size="18px" /></q-item-section>
+                    <q-item-section>Add to queue</q-item-section>
+                  </q-item>
+                  <q-separator dark />
+                  <q-item-label header style="color: rgba(255,255,255,0.4); font-size: 11px;">ADD TO PLAYLIST</q-item-label>
+                  <q-item
+                    v-for="pl in playlists"
+                    :key="pl.id"
+                    clickable
+                    v-close-popup
+                    @click="addToPlaylist(pl.id, track.id)"
+                  >
+                    <q-item-section avatar><q-icon name="queue_music" size="18px" /></q-item-section>
+                    <q-item-section>{{ pl.name }}</q-item-section>
+                  </q-item>
+                  <q-item v-if="playlists.length === 0" disable>
+                    <q-item-section class="text-grey-6" style="font-size: 12px;">No playlists yet</q-item-section>
+                  </q-item>
+                </q-list>
+              </q-menu>
+            </q-btn>
+            <q-btn flat round dense icon="more_vert" color="grey-5" size="xs" @click.stop>
+              <q-menu anchor="bottom right" self="top right">
+                <q-list dense dark style="min-width: 200px; background: #1e2230;">
+                  <q-item clickable v-close-popup @click="playNext(track.id)">
+                    <q-item-section avatar><q-icon name="playlist_play" size="18px" color="white" /></q-item-section>
+                    <q-item-section style="color: #fff;">Play next</q-item-section>
+                  </q-item>
+                  <q-item clickable v-close-popup @click="enqueueTrack(track.id)">
+                    <q-item-section avatar><q-icon name="queue" size="18px" color="white" /></q-item-section>
+                    <q-item-section style="color: #fff;">Add to queue</q-item-section>
+                  </q-item>
+                  <q-separator dark />
+                  <q-item clickable v-close-popup @click="identifySingle(track)">
+                    <q-item-section avatar><q-icon name="fingerprint" size="18px" color="orange-4" /></q-item-section>
+                    <q-item-section style="color: #fff;">Identify track</q-item-section>
+                  </q-item>
+                  <q-item clickable v-close-popup @click="showTrackDetails(track)">
+                    <q-item-section avatar><q-icon name="info_outline" size="18px" color="light-blue-4" /></q-item-section>
+                    <q-item-section style="color: #fff;">Track info</q-item-section>
+                  </q-item>
+                  <q-separator dark />
+                  <q-item clickable v-close-popup @click="removeTrack(track.id)">
+                    <q-item-section avatar><q-icon name="delete_outline" size="18px" color="red-4" /></q-item-section>
+                    <q-item-section style="color: #ef4444;">Remove from library</q-item-section>
+                  </q-item>
+                </q-list>
+              </q-menu>
+            </q-btn>
           </div>
         </template>
       </q-virtual-scroll>
@@ -87,21 +170,81 @@
     </div>
 
     <AddSourceDialog v-model="showAddSource" />
+
+    <!-- Track info dialog -->
+    <q-dialog v-model="trackDetailDialog" no-focus no-refocus>
+      <q-card dark style="min-width: 300px; background: #1e2230; border-radius: 16px; color: #fff;">
+        <q-card-section>
+          <div style="font-size: 16px; font-weight: 700; margin-bottom: 12px;">Track Info</div>
+          <div v-if="detailTrack" class="detail-grid">
+            <div class="detail-row">
+              <span class="detail-label">Title</span>
+              <span class="detail-value">{{ detailTrack.title || '—' }}</span>
+            </div>
+            <div class="detail-row">
+              <span class="detail-label">Artist</span>
+              <span class="detail-value">{{ detailTrack.artist || '—' }}</span>
+            </div>
+            <div class="detail-row">
+              <span class="detail-label">Album</span>
+              <span class="detail-value">{{ detailTrack.album || '—' }}</span>
+            </div>
+            <div class="detail-row">
+              <span class="detail-label">Duration</span>
+              <span class="detail-value">{{ formatDuration(detailTrack.duration) || '—' }}</span>
+            </div>
+            <div class="detail-row">
+              <span class="detail-label">Source</span>
+              <span class="detail-value">{{ detailTrack.sourceTag }}</span>
+            </div>
+            <div v-if="detailTrack.localPath" class="detail-row">
+              <span class="detail-label">Path</span>
+              <span class="detail-value" style="word-break: break-all;">{{ detailTrack.localPath }}</span>
+            </div>
+            <div v-if="detailTrack.s3Key" class="detail-row">
+              <span class="detail-label">S3 Key</span>
+              <span class="detail-value" style="word-break: break-all;">{{ detailTrack.s3Key }}</span>
+            </div>
+          </div>
+        </q-card-section>
+        <q-card-actions align="right">
+          <q-btn flat label="Close" color="grey-4" v-close-popup />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
+
     <BottomNav />
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue';
+import { useRouter } from 'vue-router';
 import { useLibraryStore } from 'src/stores/libraryStore';
 import { usePlayerStore } from 'src/stores/playerStore';
 import { db } from 'src/services/db';
 import AddSourceDialog from 'src/components/AddSourceDialog.vue';
 import BottomNav from 'src/components/BottomNav.vue';
+import { backend } from 'src/services/backend';
 import type { Track } from 'src/types/models';
 
+const router = useRouter();
 const libraryStore = useLibraryStore();
 const playerStore = usePlayerStore();
+
+// User session
+interface UserInfo { email: string; name: string; picture?: string; token: string; }
+const user = ref<UserInfo | null>(null);
+
+try {
+  const stored = localStorage.getItem('listune_user');
+  if (stored) user.value = JSON.parse(stored);
+} catch { /* ignore */ }
+
+function logout(): void {
+  localStorage.removeItem('listune_user');
+  router.push('/login');
+}
 
 const showAddSource = ref(false);
 const searchQuery = ref('');
@@ -110,6 +253,37 @@ const artworkUrls = ref<Record<string, string>>({});
 const tabs = ['All Songs', 'Artists', 'Albums'] as const;
 type Tab = typeof tabs[number];
 const activeTab = ref<Tab>('All Songs');
+
+// ── Playlist integration ──
+interface Playlist {
+  id: string;
+  name: string;
+  trackIds: string[];
+  createdAt: number;
+}
+
+function loadPlaylists(): Playlist[] {
+  try { return JSON.parse(localStorage.getItem('playlists') || '[]'); } catch { return []; }
+}
+function savePlaylistsToStorage(pls: Playlist[]): void {
+  localStorage.setItem('playlists', JSON.stringify(pls));
+}
+
+const playlists = ref<Playlist[]>(loadPlaylists());
+
+function addToPlaylist(playlistId: string, trackId: string): void {
+  const pl = playlists.value.find((p) => p.id === playlistId);
+  if (!pl) return;
+  if (!pl.trackIds.includes(trackId)) {
+    pl.trackIds.push(trackId);
+    savePlaylistsToStorage(playlists.value);
+  }
+}
+
+function showTrackMenu(_event: Event, _trackId: string): void {
+  // Refresh playlists in case they changed
+  playlists.value = loadPlaylists();
+}
 
 const scanRatio = computed(() => {
   const p = libraryStore.scanProgress;
@@ -141,11 +315,139 @@ function enqueueTrack(id: string) {
   playerStore.enqueue(id);
 }
 
+function playNext(id: string) {
+  const currentIdx = playerStore.currentTrackId
+    ? playerStore.queue.indexOf(playerStore.currentTrackId)
+    : -1;
+  const insertAt = currentIdx + 1;
+  const newQueue = [...playerStore.queue];
+  // Remove if already in queue to avoid duplicates
+  const existing = newQueue.indexOf(id);
+  if (existing !== -1) newQueue.splice(existing, 1);
+  newQueue.splice(insertAt, 0, id);
+  playerStore.setQueue(newQueue);
+}
+
+async function removeTrack(id: string) {
+  // Remove from IndexedDB
+  const database = await import('src/services/db').then((m) => m.db);
+  const track = await database.getTrack(id);
+  if (track?.artworkId) {
+    // Remove artwork too
+    try {
+      const idbModule = await import('idb');
+      const dbInstance = await idbModule.openDB('music-player-db', 1);
+      await dbInstance.delete('artwork', track.artworkId);
+    } catch { /* ignore */ }
+  }
+  // Delete the track record
+  const idbModule = await import('idb');
+  const dbInstance = await idbModule.openDB('music-player-db', 1);
+  await dbInstance.delete('tracks', id);
+
+  // Remove from queue if present
+  const queueIdx = playerStore.queue.indexOf(id);
+  if (queueIdx !== -1) {
+    const newQueue = [...playerStore.queue];
+    newQueue.splice(queueIdx, 1);
+    playerStore.setQueue(newQueue);
+  }
+
+  // Refresh library
+  libraryStore.search(searchQuery.value);
+}
+
+const trackDetailDialog = ref(false);
+const detailTrack = ref<Track | null>(null);
+
+function showTrackDetails(track: Track) {
+  detailTrack.value = track;
+  trackDetailDialog.value = true;
+}
+
+async function identifySingle(track: Track) {
+  let result;
+
+  if (track.sourceTag === 'server' && track.serverPath) {
+    // Server-side file — backend fetches and fingerprints it
+    result = await backend.identifyServerFile(track.serverPath);
+  } else if (track.sourceTag === 'local' && track.localPath) {
+    let blob: Blob | null = null;
+    const sources = await db.getSources();
+    for (const source of sources) {
+      if (source.type !== 'local') continue;
+      const handle = (source.config as { handle: FileSystemDirectoryHandle }).handle;
+      try {
+        const parts = track.localPath.split('/').filter(Boolean);
+        let dir: FileSystemDirectoryHandle = handle;
+        for (let i = 0; i < parts.length - 1; i++) {
+          dir = await dir.getDirectoryHandle(parts[i]!);
+        }
+        const fileHandle = await dir.getFileHandle(parts[parts.length - 1]!);
+        blob = await fileHandle.getFile();
+        break;
+      } catch { /* try next */ }
+    }
+    if (!blob) return;
+    const filename = track.localPath.split('/').pop() || 'track.mp3';
+    result = await backend.identifyTrack(blob, filename);
+  } else {
+    return;
+  }
+
+  if (!result || result.error) return;
+
+  const updated: Track = {
+    ...track,
+    title: result.title || track.title,
+    artist: result.artist || track.artist,
+    album: result.album || track.album,
+  };
+
+  // Download and store cover art if available
+  if (result.coverArtUrl && !track.artworkId) {
+    try {
+      const artResp = await fetch(result.coverArtUrl);
+      if (artResp.ok) {
+        const artBlob = await artResp.blob();
+        await db.putArtwork(track.id, artBlob);
+        updated.artworkId = track.id;
+      }
+    } catch { /* cover art fetch failed, non-fatal */ }
+  }
+
+  await db.putTrack(updated);
+
+  // Write tags to the actual file if it's on the server
+  if (track.sourceTag === 'server' && track.serverPath) {
+    await backend.writeTags({
+      filePath: track.serverPath,
+      title: result.title,
+      artist: result.artist,
+      album: result.album,
+      year: result.year,
+      genre: result.genre,
+      coverArtUrl: result.coverArtUrl,
+    });
+  }
+
+  libraryStore.search(searchQuery.value);
+}
+
 async function loadArtwork(trackId: string) {
   if (artworkUrls.value[trackId]) return;
   try {
+    // Check IndexedDB first
     const blob = await db.getArtwork(trackId);
-    if (blob) artworkUrls.value[trackId] = URL.createObjectURL(blob);
+    if (blob) {
+      artworkUrls.value[trackId] = URL.createObjectURL(blob);
+      return;
+    }
+    // For server-sourced tracks, use the backend artwork endpoint
+    const track = libraryStore.results.find((t) => t.id === trackId);
+    if (track?.sourceTag === 'server' && track.serverPath) {
+      artworkUrls.value[trackId] = backend.artworkUrl(track.serverPath);
+    }
   } catch { /* no artwork */ }
 }
 
@@ -162,6 +464,81 @@ watch(() => libraryStore.results, (results) => {
 watch(() => libraryStore.isScanning, (scanning) => {
   if (!scanning) libraryStore.search(searchQuery.value);
 });
+
+// ── AcoustID identification ──
+const isIdentifying = ref(false);
+
+const untaggedCount = computed(() =>
+  libraryStore.results.filter((t) => !t.artist && !t.title).length
+    + libraryStore.results.filter((t) => t.title && !t.artist).length,
+);
+
+async function identifyUntagged(): Promise<void> {
+  const untagged = libraryStore.results.filter((t) => !t.artist);
+  if (untagged.length === 0) return;
+
+  isIdentifying.value = true;
+
+  for (const track of untagged) {
+    try {
+      // Get the audio file blob
+      let blob: Blob | null = null;
+
+      if (track.sourceTag === 'local' && track.localPath) {
+        const sources = await db.getSources();
+        for (const source of sources) {
+          if (source.type !== 'local') continue;
+          const handle = (source.config as { handle: FileSystemDirectoryHandle }).handle;
+          try {
+            const parts = track.localPath.split('/').filter(Boolean);
+            let dir: FileSystemDirectoryHandle = handle;
+            for (let i = 0; i < parts.length - 1; i++) {
+              dir = await dir.getDirectoryHandle(parts[i]!);
+            }
+            const fileHandle = await dir.getFileHandle(parts[parts.length - 1]!);
+            blob = await fileHandle.getFile();
+            break;
+          } catch { /* try next source */ }
+        }
+      }
+
+      if (!blob) continue;
+
+      const filename = track.localPath?.split('/').pop() || 'track.mp3';
+      const result = await backend.identifyTrack(blob, filename);
+
+      if (result.error) continue;
+
+      // Update track in DB with identified metadata
+      const updated: Track = {
+        ...track,
+        title: result.title || track.title,
+        artist: result.artist || track.artist,
+        album: result.album || track.album,
+      };
+
+      // Download and store cover art if available
+      if (result.coverArtUrl && !track.artworkId) {
+        try {
+          const artResp = await fetch(result.coverArtUrl);
+          if (artResp.ok) {
+            const artBlob = await artResp.blob();
+            await db.putArtwork(track.id, artBlob);
+            updated.artworkId = track.id;
+          }
+        } catch { /* cover art fetch failed, non-fatal */ }
+      }
+
+      await db.putTrack(updated);
+    } catch {
+      // skip failed tracks
+    }
+  }
+
+  isIdentifying.value = false;
+  // Refresh library results
+  libraryStore.search(searchQuery.value);
+}
 
 onMounted(() => { libraryStore.search(''); });
 </script>
@@ -198,6 +575,31 @@ onMounted(() => { libraryStore.search(''); });
   font-size: 13px;
   padding: 4px 16px;
   border-radius: 20px !important;
+}
+
+.user-avatar-btn {
+  padding: 0 !important;
+  min-width: 34px !important;
+  min-height: 34px !important;
+}
+
+.user-avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  overflow: hidden;
+  cursor: pointer;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #2a2d3e;
+
+  img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
 }
 
 /* ── Search ── */
@@ -384,4 +786,29 @@ onMounted(() => { libraryStore.search(''); });
 }
 
 /* ── Mini player styles removed — handled by BottomNav ── */
+
+/* ── Track detail dialog ── */
+.detail-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.detail-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.detail-label {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.4);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.detail-value {
+  font-size: 14px;
+  color: #fff;
+}
 </style>

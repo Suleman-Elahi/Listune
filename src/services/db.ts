@@ -72,6 +72,54 @@ export const db = {
     return database.get('artwork', trackId);
   },
 
+  async getTracksByArtist(artist: string): Promise<Track[]> {
+    const database = await getDB();
+    return database.getAllFromIndex('tracks', 'by-artist', artist);
+  },
+
+  async getTracksByAlbum(album: string): Promise<Track[]> {
+    const database = await getDB();
+    return database.getAllFromIndex('tracks', 'by-album', album);
+  },
+
+  async getAllArtists(): Promise<{ name: string; trackCount: number; artworkId: string | null }[]> {
+    const database = await getDB();
+    const all = await database.getAll('tracks');
+    const map = new Map<string, { count: number; artworkId: string | null }>();
+    for (const t of all) {
+      const artist = t.artist || 'Unknown Artist';
+      const existing = map.get(artist);
+      if (existing) {
+        existing.count++;
+        if (!existing.artworkId && t.artworkId) existing.artworkId = t.artworkId;
+      } else {
+        map.set(artist, { count: 1, artworkId: t.artworkId });
+      }
+    }
+    return Array.from(map.entries())
+      .map(([name, { count, artworkId }]) => ({ name, trackCount: count, artworkId }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  },
+
+  async getAllAlbums(): Promise<{ name: string; artist: string; trackCount: number; artworkId: string | null }[]> {
+    const database = await getDB();
+    const all = await database.getAll('tracks');
+    const map = new Map<string, { artist: string; count: number; artworkId: string | null }>();
+    for (const t of all) {
+      const album = t.album || 'Unknown Album';
+      const existing = map.get(album);
+      if (existing) {
+        existing.count++;
+        if (!existing.artworkId && t.artworkId) existing.artworkId = t.artworkId;
+      } else {
+        map.set(album, { artist: t.artist || 'Unknown Artist', count: 1, artworkId: t.artworkId });
+      }
+    }
+    return Array.from(map.entries())
+      .map(([name, { artist, count, artworkId }]) => ({ name, artist, trackCount: count, artworkId }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  },
+
   async putSource(name: string, record: SourceRecord): Promise<void> {
     const database = await getDB();
     await database.put('sources', { ...record, name });

@@ -39,6 +39,9 @@ export interface ScanResult {
 }
 
 export const backend = {
+  /** The backend base URL (for constructing proxy URLs etc.) */
+  baseUrl: BASE_URL,
+
   /** Redirect user to Google SSO. */
   loginGoogle(): void {
     window.location.href = `${BASE_URL}/auth/google`;
@@ -114,6 +117,31 @@ export const backend = {
   async healthCheck(): Promise<boolean> {
     try {
       const res = await fetch(`${BASE_URL}/health`, { signal: AbortSignal.timeout(3000) });
+      return res.ok;
+    } catch {
+      return false;
+    }
+  },
+
+  /** Load persisted user state by key. Returns null if not found. */
+  async getState<T>(key: string): Promise<T | null> {
+    try {
+      const res = await fetch(`${BASE_URL}/api/state?key=${encodeURIComponent(key)}`);
+      if (!res.ok) return null;
+      return await res.json() as T;
+    } catch {
+      return null;
+    }
+  },
+
+  /** Save user state by key. */
+  async putState(key: string, value: unknown): Promise<boolean> {
+    try {
+      const res = await fetch(`${BASE_URL}/api/state?key=${encodeURIComponent(key)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(value),
+      });
       return res.ok;
     } catch {
       return false;

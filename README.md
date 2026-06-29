@@ -149,9 +149,7 @@ cd server && go build -o listune-server .
 - [x] MusicBrainz + AcoustID — audio fingerprinting to auto-identify untagged tracks
 - [x] Google SSO — sign in with Google
 - [x] Ultra lightweight build — removed axios, Roboto font, Vue Options API; system font stack, proper PWA caching
-- [ ] Cross-device playlist sync via Google account
-- [ ] NextCloud/WebDAV source support
-- [ ] Artist and album grouping views in the library
+- [x] Artist and album grouping views in the library
 
 ## License
 

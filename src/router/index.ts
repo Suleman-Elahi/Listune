@@ -12,10 +12,18 @@ const Router = createRouter({
 
 // Auth guard: redirect to /login if not authenticated
 Router.beforeEach((to) => {
-  const isLoggedIn = !!localStorage.getItem('listune_user');
-  if (!to.meta.public && !isLoggedIn) {
-    return '/login';
+  if (to.meta.public) return;
+  try {
+    const stored = localStorage.getItem('listune_user');
+    if (stored) {
+      const user = JSON.parse(stored);
+      if (user && user.token) return;
+    }
+  } catch {
+    // corrupted data — clear it
+    localStorage.removeItem('listune_user');
   }
+  return '/login';
 });
 
 export default Router;

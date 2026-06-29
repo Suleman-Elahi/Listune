@@ -78,8 +78,8 @@
       <div class="lib-heading-sub">{{ libraryStore.results.length }} COLLECTED TRACKS</div>
     </div>
 
-    <!-- Track list -->
-    <div class="track-list-wrap">
+    <!-- Track list (All Songs tab) -->
+    <div v-if="activeTab === 'All Songs'" class="track-list-wrap">
       <q-virtual-scroll
         v-if="filteredTracks.length > 0"
         :items="filteredTracks"
@@ -166,6 +166,122 @@
         <q-icon name="library_music" size="56px" color="grey-7" />
         <p>No tracks yet</p>
         <q-btn unelevated rounded color="primary" label="Add a source" @click="showAddSource = true" />
+      </div>
+    </div>
+
+    <!-- Artists tab -->
+    <div v-if="activeTab === 'Artists'" class="track-list-wrap">
+      <!-- Artist detail view -->
+      <div v-if="selectedArtist" class="group-detail">
+        <div class="group-detail-header">
+          <q-btn flat round icon="arrow_back" color="white" size="sm" @click="selectedArtist = null" />
+          <div class="group-detail-info">
+            <div class="group-detail-title">{{ selectedArtist }}</div>
+            <div class="group-detail-sub">{{ artistTracks.length }} tracks</div>
+          </div>
+          <q-btn unelevated rounded label="Play all" color="primary" size="sm" @click="playAllArtistTracks" />
+        </div>
+        <div class="group-tracks-scroll">
+          <div
+            v-for="(track, index) in artistTracks"
+            :key="track.id"
+            class="track-row"
+            :class="{ 'track-row--active': track.id === playerStore.currentTrackId }"
+            @click="playArtistTrack(track.id)"
+          >
+            <span class="track-num">{{ String(index + 1).padStart(2, '0') }}</span>
+            <div class="track-art">
+              <img v-if="artworkUrls[track.id]" :src="artworkUrls[track.id]" />
+              <q-icon v-else name="music_note" color="grey-6" size="20px" />
+            </div>
+            <div class="track-info">
+              <div class="track-title">{{ track.title || 'Unknown' }}</div>
+              <div class="track-artist">{{ track.album || 'Unknown album' }}</div>
+            </div>
+            <span class="track-duration">{{ formatDuration(track.duration) }}</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Artist list view -->
+      <div v-else class="group-grid-scroll">
+        <div v-if="artists.length > 0" class="group-grid">
+          <div
+            v-for="artist in filteredArtists"
+            :key="artist.name"
+            class="group-card"
+            @click="openArtist(artist.name)"
+          >
+            <div class="group-card-art">
+              <img v-if="artist.artworkId && artworkUrls[artist.artworkId]" :src="artworkUrls[artist.artworkId]" />
+              <q-icon v-else name="person" color="grey-5" size="36px" />
+            </div>
+            <div class="group-card-name">{{ artist.name }}</div>
+            <div class="group-card-sub">{{ artist.trackCount }} {{ artist.trackCount === 1 ? 'track' : 'tracks' }}</div>
+          </div>
+        </div>
+        <div v-else class="empty-state">
+          <q-icon name="person" size="56px" color="grey-7" />
+          <p>No artists yet</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Albums tab -->
+    <div v-if="activeTab === 'Albums'" class="track-list-wrap">
+      <!-- Album detail view -->
+      <div v-if="selectedAlbum" class="group-detail">
+        <div class="group-detail-header">
+          <q-btn flat round icon="arrow_back" color="white" size="sm" @click="selectedAlbum = null" />
+          <div class="group-detail-info">
+            <div class="group-detail-title">{{ selectedAlbum }}</div>
+            <div class="group-detail-sub">{{ albumTracks.length }} tracks</div>
+          </div>
+          <q-btn unelevated rounded label="Play all" color="primary" size="sm" @click="playAllAlbumTracks" />
+        </div>
+        <div class="group-tracks-scroll">
+          <div
+            v-for="(track, index) in albumTracks"
+            :key="track.id"
+            class="track-row"
+            :class="{ 'track-row--active': track.id === playerStore.currentTrackId }"
+            @click="playAlbumTrack(track.id)"
+          >
+            <span class="track-num">{{ String(index + 1).padStart(2, '0') }}</span>
+            <div class="track-art">
+              <img v-if="artworkUrls[track.id]" :src="artworkUrls[track.id]" />
+              <q-icon v-else name="music_note" color="grey-6" size="20px" />
+            </div>
+            <div class="track-info">
+              <div class="track-title">{{ track.title || 'Unknown' }}</div>
+              <div class="track-artist">{{ track.artist || 'Unknown artist' }}</div>
+            </div>
+            <span class="track-duration">{{ formatDuration(track.duration) }}</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Album list view -->
+      <div v-else class="group-grid-scroll">
+        <div v-if="albums.length > 0" class="group-grid">
+          <div
+            v-for="album in filteredAlbums"
+            :key="album.name"
+            class="group-card"
+            @click="openAlbum(album.name)"
+          >
+            <div class="group-card-art">
+              <img v-if="album.artworkId && artworkUrls[album.artworkId]" :src="artworkUrls[album.artworkId]" />
+              <q-icon v-else name="album" color="grey-5" size="36px" />
+            </div>
+            <div class="group-card-name">{{ album.name }}</div>
+            <div class="group-card-sub">{{ album.artist }} · {{ album.trackCount }} {{ album.trackCount === 1 ? 'track' : 'tracks' }}</div>
+          </div>
+        </div>
+        <div v-else class="empty-state">
+          <q-icon name="album" size="56px" color="grey-7" />
+          <p>No albums yet</p>
+        </div>
       </div>
     </div>
 
@@ -292,6 +408,86 @@ const scanRatio = computed(() => {
 });
 
 const filteredTracks = computed<Track[]>(() => libraryStore.results);
+
+// ── Artist & Album grouping ──
+interface ArtistGroup { name: string; trackCount: number; artworkId: string | null; }
+interface AlbumGroup { name: string; artist: string; trackCount: number; artworkId: string | null; }
+
+const artists = ref<ArtistGroup[]>([]);
+const albums = ref<AlbumGroup[]>([]);
+const selectedArtist = ref<string | null>(null);
+const selectedAlbum = ref<string | null>(null);
+const artistTracks = ref<Track[]>([]);
+const albumTracks = ref<Track[]>([]);
+
+const filteredArtists = computed(() => {
+  if (!searchQuery.value) return artists.value;
+  const q = searchQuery.value.toLowerCase();
+  return artists.value.filter((a) => a.name.toLowerCase().includes(q));
+});
+
+const filteredAlbums = computed(() => {
+  if (!searchQuery.value) return albums.value;
+  const q = searchQuery.value.toLowerCase();
+  return albums.value.filter((a) => a.name.toLowerCase().includes(q) || a.artist.toLowerCase().includes(q));
+});
+
+async function loadArtists(): Promise<void> {
+  artists.value = await db.getAllArtists();
+  // Load artwork for artists
+  for (const a of artists.value.slice(0, 30)) {
+    if (a.artworkId) loadArtwork(a.artworkId);
+  }
+}
+
+async function loadAlbums(): Promise<void> {
+  albums.value = await db.getAllAlbums();
+  // Load artwork for albums
+  for (const a of albums.value.slice(0, 30)) {
+    if (a.artworkId) loadArtwork(a.artworkId);
+  }
+}
+
+async function openArtist(name: string): Promise<void> {
+  selectedArtist.value = name;
+  artistTracks.value = await db.getTracksByArtist(name === 'Unknown Artist' ? '' : name);
+  artistTracks.value.forEach((t) => { if (t.artworkId) loadArtwork(t.id); });
+}
+
+async function openAlbum(name: string): Promise<void> {
+  selectedAlbum.value = name;
+  albumTracks.value = await db.getTracksByAlbum(name === 'Unknown Album' ? '' : name);
+  albumTracks.value.forEach((t) => { if (t.artworkId) loadArtwork(t.id); });
+}
+
+async function playArtistTrack(id: string): Promise<void> {
+  playerStore.setQueue(artistTracks.value.map((t) => t.id));
+  await playerStore.play(id);
+}
+
+async function playAlbumTrack(id: string): Promise<void> {
+  playerStore.setQueue(albumTracks.value.map((t) => t.id));
+  await playerStore.play(id);
+}
+
+function playAllArtistTracks(): void {
+  if (artistTracks.value.length === 0) return;
+  playerStore.setQueue(artistTracks.value.map((t) => t.id));
+  playerStore.play(artistTracks.value[0]!.id);
+}
+
+function playAllAlbumTracks(): void {
+  if (albumTracks.value.length === 0) return;
+  playerStore.setQueue(albumTracks.value.map((t) => t.id));
+  playerStore.play(albumTracks.value[0]!.id);
+}
+
+watch(activeTab, (tab) => {
+  selectedArtist.value = null;
+  selectedAlbum.value = null;
+  if (tab === 'Artists') loadArtists();
+  else if (tab === 'Albums') loadAlbums();
+});
 
 function onSearch() {
   libraryStore.search(searchQuery.value);
@@ -783,6 +979,114 @@ onMounted(() => { libraryStore.search(''); });
   color: rgba(255, 255, 255, 0.4);
 
   p { margin: 0; font-size: 15px; }
+}
+
+/* ── Group grid (Artists / Albums) ── */
+.group-grid-scroll {
+  height: 100%;
+  overflow-y: auto;
+  padding: 0 16px 80px;
+}
+
+.group-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+}
+
+.group-card {
+  background: #1a1d28;
+  border-radius: 14px;
+  padding: 16px 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  cursor: pointer;
+  transition: background 0.15s ease;
+
+  &:hover {
+    background: #252838;
+  }
+}
+
+.group-card-art {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  background: #252838;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 10px;
+
+  img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+}
+
+.group-card-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: #fff;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.group-card-sub {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.4);
+  text-align: center;
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+/* ── Group detail view ── */
+.group-detail {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.group-detail-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  flex-shrink: 0;
+}
+
+.group-detail-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.group-detail-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.group-detail-sub {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.group-tracks-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding-bottom: 80px;
 }
 
 /* ── Mini player styles removed — handled by BottomNav ── */

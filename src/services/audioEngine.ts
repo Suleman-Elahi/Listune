@@ -18,6 +18,7 @@ interface AudioEngineInterface {
 
 // Req 1.1: Single HTMLAudioElement for the lifetime of the app
 const audio = new Audio();
+audio.crossOrigin = 'anonymous';
 
 let _audioContext: AudioContext | null = null;
 let _analyserNode: AnalyserNode | null = null;
@@ -47,7 +48,7 @@ const audioEngine: AudioEngineInterface = {
 
     _audioContext = new AudioContext();
     _analyserNode = _audioContext.createAnalyser();
-    _analyserNode.fftSize = 64;
+    _analyserNode.fftSize = 128;
     _analyserNode.smoothingTimeConstant = 0.8;
 
     _sourceNode = _audioContext.createMediaElementSource(audio);

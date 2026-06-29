@@ -165,7 +165,14 @@ async function startScan() {
     libraryStore.startScan(source);
     open.value = false;
   } else if (sourceType.value === 's3') {
-    libraryStore.startScan({ ...s3Form.value });
+    const cfg = { ...s3Form.value };
+    // Save S3 source config to IndexedDB so playback can use it later
+    void db.putSource(cfg.bucket, {
+      name: cfg.bucket,
+      type: 's3' as const,
+      config: cfg,
+    });
+    libraryStore.startScan(cfg);
     open.value = false;
   }
 }

@@ -3,11 +3,12 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, onUnmounted } from 'vue';
+import { onMounted, onUnmounted, watch } from 'vue';
 import { usePlayerStore, setupMediaSession } from 'src/stores/playerStore';
 import { audioEngine } from 'src/services/audioEngine';
 
 let playerStore: ReturnType<typeof usePlayerStore>;
+let persistTimeout: ReturnType<typeof setTimeout> | null = null;
 
 function onKeydown(e: KeyboardEvent): void {
   // Don't capture when typing in input/textarea
@@ -54,6 +55,26 @@ function onKeydown(e: KeyboardEvent): void {
 onMounted(() => {
   playerStore = usePlayerStore();
   setupMediaSession(playerStore);
+
+  // Restore queue from backend
+  playerStore.restoreQueue();
+
+  // Register service worker for PWA
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
+  }
+
+  // Debounced persist: save queue state 1s after last change
+  watch(
+    () => [playerStore.queue, playerStore.currentTrackId, playerStore.isShuffling, playerStore.isLooping, playerStore.volume] as const,
+    () => {
+      if (persistTimeout) clearTimeout(persistTimeout);
+      persistTimeout = setTimeout(() => {
+        playerStore.persistQueue();
+      }, 1000);
+    },
+    { deep: true },
+  );
 
   // Req 1.2: initialize AudioContext on first user interaction (autoplay policy)
   const initOnClick = () => {

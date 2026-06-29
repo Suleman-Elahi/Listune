@@ -40,6 +40,13 @@ func main() {
 	// Write ID3 tags to file
 	mux.HandleFunc("POST /api/write-tags", handlers.WriteTags)
 
+	// User state persistence (JSON file storage)
+	mux.HandleFunc("GET /api/state", handlers.GetUserState)
+	mux.HandleFunc("PUT /api/state", handlers.PutUserState)
+
+	// S3 proxy (avoids CORS issues with local S3 servers)
+	mux.HandleFunc("GET /api/s3proxy", handlers.S3Proxy)
+
 	// Wrap with CORS
 	handler := handlers.CORSMiddleware(mux)
 

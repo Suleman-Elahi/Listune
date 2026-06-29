@@ -89,7 +89,21 @@
         <q-card-section class="pl-detail-header">
           <q-btn flat round icon="close" color="white" size="sm" v-close-popup />
           <span class="pl-detail-name">{{ activePlaylist?.name }}</span>
-          <q-btn flat round icon="more_vert" color="white" size="sm" />
+          <q-btn flat round icon="more_vert" color="white" size="sm">
+            <q-menu anchor="bottom right" self="top right">
+              <q-list dense dark style="min-width: 180px; background: #1e2230;">
+                <q-item clickable v-close-popup @click="showRenameDialog = true">
+                  <q-item-section avatar><q-icon name="edit" size="18px" color="white" /></q-item-section>
+                  <q-item-section style="color: #fff;">Rename</q-item-section>
+                </q-item>
+                <q-separator dark />
+                <q-item clickable v-close-popup @click="showDeleteConfirm = true">
+                  <q-item-section avatar><q-icon name="delete_outline" size="18px" color="red-4" /></q-item-section>
+                  <q-item-section style="color: #ef4444;">Delete playlist</q-item-section>
+                </q-item>
+              </q-list>
+            </q-menu>
+          </q-btn>
         </q-card-section>
         <q-card-section style="padding: 0; overflow-y: auto; max-height: calc(80vh - 60px);">
           <div v-if="activePlaylistTracks.length === 0" style="text-align:center; padding: 32px; color: rgba(255,255,255,0.4);">
@@ -117,12 +131,47 @@
       </q-card>
     </q-dialog>
 
+    <!-- Rename playlist dialog -->
+    <q-dialog v-model="showRenameDialog" no-focus no-refocus>
+      <q-card dark style="min-width: 280px; background: #1e2230; border-radius: 16px;">
+        <q-card-section>
+          <div style="font-size: 16px; font-weight: 700; color: #fff; margin-bottom: 12px;">Rename Playlist</div>
+          <input
+            v-model="renameValue"
+            class="create-input"
+            placeholder="New name..."
+            @keyup.enter="renamePlaylist"
+          />
+        </q-card-section>
+        <q-card-actions align="right">
+          <q-btn flat label="Cancel" color="grey-5" v-close-popup />
+          <q-btn unelevated rounded label="Rename" color="primary" @click="renamePlaylist" />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
+
+    <!-- Delete playlist confirm dialog -->
+    <q-dialog v-model="showDeleteConfirm" no-focus no-refocus>
+      <q-card dark style="min-width: 280px; background: #1e2230; border-radius: 16px;">
+        <q-card-section>
+          <div style="font-size: 16px; font-weight: 700; color: #fff; margin-bottom: 8px;">Delete Playlist</div>
+          <div style="color: rgba(255,255,255,0.6); font-size: 14px;">
+            Are you sure you want to delete <strong style="color: #fff;">{{ activePlaylist?.name }}</strong>? This cannot be undone.
+          </div>
+        </q-card-section>
+        <q-card-actions align="right">
+          <q-btn flat label="Cancel" color="grey-5" v-close-popup />
+          <q-btn unelevated rounded label="Delete" color="red" @click="deletePlaylist" />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
+
     <BottomNav />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue';
+import { ref, computed, watch, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
 import { usePlayerStore } from 'src/stores/playerStore';
 import { db } from 'src/services/db';
@@ -162,6 +211,16 @@ const activePlaylist = ref<Playlist | null>(null);
 const activePlaylistTracks = ref<Track[]>([]);
 const detailArtwork = ref<Record<string, string>>({});
 
+const showRenameDialog = ref(false);
+const renameValue = ref('');
+const showDeleteConfirm = ref(false);
+
+watch(showRenameDialog, (val) => {
+  if (val && activePlaylist.value) {
+    renameValue.value = activePlaylist.value.name;
+  }
+});
+
 const filteredPlaylists = computed(() => {
   let list = playlists.value;
   if (searchQuery.value) {
@@ -188,9 +247,18 @@ async function openPlaylist(pl: Playlist) {
   activePlaylist.value = pl;
   showDetail.value = true;
   const tracks: Track[] = [];
+  const validIds: string[] = [];
   for (const id of pl.trackIds) {
     const t = await db.getTrack(id);
-    if (t) tracks.push(t);
+    if (t) {
+      tracks.push(t);
+      validIds.push(id);
+    }
+  }
+  // Prune deleted track IDs from the playlist
+  if (validIds.length !== pl.trackIds.length) {
+    pl.trackIds = validIds;
+    savePlaylists(playlists.value);
   }
   activePlaylistTracks.value = tracks;
   // load artwork
@@ -211,12 +279,52 @@ async function playFromPlaylist(startIdx: number) {
   router.push('/');
 }
 
+function renamePlaylist() {
+  const name = renameValue.value.trim();
+  if (!name || !activePlaylist.value) return;
+  const idx = playlists.value.findIndex((p) => p.id === activePlaylist.value!.id);
+  if (idx !== -1) {
+    playlists.value[idx]!.name = name;
+    activePlaylist.value.name = name;
+    savePlaylists(playlists.value);
+  }
+  showRenameDialog.value = false;
+}
+
+function deletePlaylist() {
+  if (!activePlaylist.value) return;
+  playlists.value = playlists.value.filter((p) => p.id !== activePlaylist.value!.id);
+  savePlaylists(playlists.value);
+  showDeleteConfirm.value = false;
+  showDetail.value = false;
+  activePlaylist.value = null;
+}
+
 function formatDuration(seconds: number): string {
   if (!seconds || !isFinite(seconds)) return '';
   const m = Math.floor(seconds / 60);
   const s = Math.floor(seconds % 60);
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
+
+// On mount, prune deleted tracks from all playlists so card counts are accurate
+onMounted(async () => {
+  let changed = false;
+  for (const pl of playlists.value) {
+    const validIds: string[] = [];
+    for (const id of pl.trackIds) {
+      const t = await db.getTrack(id);
+      if (t) validIds.push(id);
+    }
+    if (validIds.length !== pl.trackIds.length) {
+      pl.trackIds = validIds;
+      changed = true;
+    }
+  }
+  if (changed) {
+    savePlaylists(playlists.value);
+  }
+});
 </script>
 
 <style scoped lang="scss">

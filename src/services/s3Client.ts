@@ -12,6 +12,10 @@ function configure(cfg: S3Config): void {
   config = cfg;
 }
 
+function isConfigured(): boolean {
+  return config !== null;
+}
+
 function getConfig(): S3Config {
   if (!config) throw new Error('S3Client: not configured — call configure() first');
   return config;
@@ -119,10 +123,11 @@ async function getPresignedUrl(key: string, expiresIn = 3600): Promise<string> {
 
 async function fetchPartial(key: string, bytes: number): Promise<ArrayBuffer> {
   const url = await getPresignedUrl(key);
-  const response = await fetch(url, {
+  const proxyUrl = `${import.meta.env.VITE_BACKEND_URL || 'http://localhost:8090'}/api/s3proxy?url=${encodeURIComponent(url)}`;
+  const response = await fetch(proxyUrl, {
     headers: { Range: `bytes=0-${bytes - 1}` },
   });
   return response.arrayBuffer();
 }
 
-export const s3Client = { configure, getPresignedUrl, fetchPartial };
+export const s3Client = { configure, isConfigured, getPresignedUrl, fetchPartial };

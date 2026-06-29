@@ -11,10 +11,18 @@
       <q-btn flat round icon="library_music" color="white" size="sm" @click="$router.push('/library')" />
     </div>
 
-    <!-- Req 6.1: Visualizer in upper ~40% -->
+    <!-- Req 6.1: Visualizer / Album Art area with toggle -->
     <div class="visualizer-area">
-      <div class="visualizer-card">
+      <div class="viz-toggle">
+        <button class="viz-toggle-btn" :class="{ active: vizMode === 'visualizer' }" @click="vizMode = 'visualizer'">Visualizer</button>
+        <button class="viz-toggle-btn" :class="{ active: vizMode === 'artwork' }" @click="vizMode = 'artwork'">Album Art</button>
+      </div>
+      <div v-if="vizMode === 'visualizer'" class="visualizer-card">
         <VisualizerCanvas />
+      </div>
+      <div v-else class="artwork-card">
+        <img v-if="artworkUrl" :src="artworkUrl" class="artwork-img" />
+        <q-icon v-else name="album" color="grey-6" size="80px" />
       </div>
     </div>
 
@@ -116,9 +124,10 @@
 // Feature: xp-music-player — NowPlayingView
 // Requirements: 6.1, 6.2, 6.3, 6.4, 6.5, 6.6, 6.7, 6.8, 6.9
 
-import { ref, computed, watch } from 'vue';
+import { ref, computed, watch, onMounted } from 'vue';
 import { usePlayerStore } from 'src/stores/playerStore';
 import { db } from 'src/services/db';
+import { backend } from 'src/services/backend';
 import VisualizerCanvas from 'src/components/VisualizerCanvas.vue';
 import ProgressBar from 'src/components/ProgressBar.vue';
 import DrawerPanel from 'src/components/DrawerPanel.vue';
@@ -127,6 +136,23 @@ import type { Track } from 'src/types/models';
 
 const playerStore = usePlayerStore();
 const drawerOpen = ref(false);
+
+// Visualizer vs Album Art toggle — restore from backend
+const vizMode = ref<'visualizer' | 'artwork'>('visualizer');
+const artworkUrl = ref<string | null>(null);
+
+// Restore vizMode preference on mount
+onMounted(async () => {
+  const saved = await backend.getState<{ vizMode: 'visualizer' | 'artwork' }>('player_prefs');
+  if (saved?.vizMode) {
+    vizMode.value = saved.vizMode;
+  }
+});
+
+// Persist vizMode when it changes
+watch(vizMode, (mode) => {
+  backend.putState('player_prefs', { vizMode: mode });
+});
 
 // Current track metadata
 const currentTrack = ref<Track | null>(null);
@@ -147,10 +173,24 @@ watch(
   async (id) => {
     if (!id) {
       currentTrack.value = null;
+      artworkUrl.value = null;
       return;
     }
     const track = await db.getTrack(id);
     currentTrack.value = track ?? null;
+
+    // Load artwork
+    if (track?.artworkId) {
+      const blob = await db.getArtwork(track.artworkId);
+      if (blob) {
+        if (artworkUrl.value) URL.revokeObjectURL(artworkUrl.value);
+        artworkUrl.value = URL.createObjectURL(blob);
+      } else {
+        artworkUrl.value = null;
+      }
+    } else {
+      artworkUrl.value = null;
+    }
   },
   { immediate: true },
 );
@@ -210,15 +250,43 @@ function onVolumeInput(e: Event): void {
   flex: 0 0 40%;
   min-height: 0;
   display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  padding: 8px 16px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 4px 16px;
   box-sizing: border-box;
+}
+
+.viz-toggle {
+  display: flex;
+  gap: 0;
+  margin-bottom: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 20px;
+  padding: 3px;
+  flex-shrink: 0;
+}
+
+.viz-toggle-btn {
+  padding: 5px 16px;
+  border: none;
+  border-radius: 17px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+
+  &.active {
+    background: rgba(0, 255, 80, 0.2);
+    color: #AAFF00;
+  }
 }
 
 .visualizer-card {
   width: 100%;
-  height: 75%;
+  flex: 1;
   min-height: 0;
   border-radius: 18px;
   border: 1px solid rgba(0, 255, 80, 0.35);
@@ -245,6 +313,25 @@ function onVolumeInput(e: Event): void {
     pointer-events: none;
     z-index: 1;
   }
+}
+
+.artwork-card {
+  width: 100%;
+  flex: 1;
+  min-height: 0;
+  border-radius: 18px;
+  background: #1a1a1a;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.6);
+}
+
+.artwork-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .track-info {

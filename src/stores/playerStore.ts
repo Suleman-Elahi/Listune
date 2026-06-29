@@ -6,6 +6,7 @@ import { markRaw, watch } from 'vue';
 import { audioEngine, _audioElement } from 'src/services/audioEngine';
 import { db } from 'src/services/db';
 import { s3Client } from 'src/services/s3Client';
+import { backend } from 'src/services/backend';
 
 // Resolve a local track path to a blob URL using stored FileSystemDirectoryHandle
 async function resolveLocalUrl(localPath: string): Promise<string | null> {
@@ -74,7 +75,12 @@ export const usePlayerStore = defineStore('player', {
 
       let url: string;
       if (track.sourceTag === 's3' && track.s3Key) {
-        url = await s3Client.getPresignedUrl(track.s3Key);
+        // Ensure s3Client is configured from saved sources
+        await this._ensureS3Configured();
+        const presigned = await s3Client.getPresignedUrl(track.s3Key);
+        // Route through backend proxy to avoid CORS issues with Web Audio API
+        const { backend: be } = await import('src/services/backend');
+        url = `${be.baseUrl}/api/s3proxy?url=${encodeURIComponent(presigned)}`;
       } else if (track.sourceTag === 'server' && track.serverPath) {
         const { backend } = await import('src/services/backend');
         url = backend.streamUrl(track.serverPath);
@@ -86,6 +92,8 @@ export const usePlayerStore = defineStore('player', {
         return;
       }
 
+      // Ensure AudioContext is initialized (autoplay policy requires user gesture)
+      _engine.init();
       await _engine.loadAndPlay(url);
 
       this.currentTrackId = trackId;
@@ -102,6 +110,11 @@ export const usePlayerStore = defineStore('player', {
     },
 
     resume(): void {
+      // If audio source isn't loaded (e.g. after app restart), re-play the current track
+      if (this.currentTrackId && !_audioElement.src) {
+        this.play(this.currentTrackId);
+        return;
+      }
       _engine.resume();
       this.isPlaying = true;
       _startInterval(this);
@@ -181,6 +194,47 @@ export const usePlayerStore = defineStore('player', {
 
     enqueue(id: string): void {
       this.queue.push(id);
+    },
+
+    /** Persist queue + current track to backend */
+    async persistQueue(): Promise<void> {
+      await backend.putState('player_queue', {
+        queue: this.queue,
+        currentTrackId: this.currentTrackId,
+        isShuffling: this.isShuffling,
+        isLooping: this.isLooping,
+        volume: this.volume,
+      });
+    },
+
+    /** Ensure s3Client is configured from saved IndexedDB sources */
+    async _ensureS3Configured(): Promise<void> {
+      if (s3Client.isConfigured()) return;
+      const sources = await db.getSources();
+      const s3Source = sources.find((s) => s.type === 's3');
+      if (s3Source) {
+        const cfg = s3Source.config as import('src/types/models').S3Config;
+        s3Client.configure(cfg);
+      }
+    },
+
+    /** Restore queue from backend on app load */
+    async restoreQueue(): Promise<void> {
+      const saved = await backend.getState<{
+        queue: string[];
+        currentTrackId: string | null;
+        isShuffling: boolean;
+        isLooping: boolean;
+        volume: number;
+      }>('player_queue');
+      if (saved) {
+        this.queue = saved.queue ?? [];
+        this.currentTrackId = saved.currentTrackId ?? null;
+        this.isShuffling = saved.isShuffling ?? false;
+        this.isLooping = saved.isLooping ?? false;
+        this.volume = saved.volume ?? 1;
+        _engine.setVolume(this.volume);
+      }
     },
   },
 });

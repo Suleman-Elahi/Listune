@@ -34,7 +34,7 @@ func GoogleLogin(w http.ResponseWriter, r *http.Request) {
 		"redirect_uri":  {redirectURI},
 		"scope":         {scopes},
 		"access_type":   {"offline"},
-		"prompt":        {"consent"},
+		"prompt":        {"select_account"},
 	}
 
 	http.Redirect(w, r, googleAuthURL+"?"+params.Encode(), http.StatusTemporaryRedirect)

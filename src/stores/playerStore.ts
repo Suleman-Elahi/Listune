@@ -3,7 +3,7 @@
 
 import { defineStore } from 'pinia';
 import { markRaw, watch } from 'vue';
-import { audioEngine, _audioElement } from 'src/services/audioEngine';
+import { audioEngine } from 'src/services/audioEngine';
 import { db } from 'src/services/db';
 import { s3Client } from 'src/services/s3Client';
 import { backend } from 'src/services/backend';
@@ -42,8 +42,9 @@ function _startInterval(store: { currentTime: number; duration: number }): void 
   if (_intervalId !== null) return;
   // Req 1.8: update currentTime and duration at most every 250ms
   _intervalId = setInterval(() => {
-    store.currentTime = _audioElement.currentTime;
-    store.duration = isFinite(_audioElement.duration) ? _audioElement.duration : 0;
+    const el = _engine.currentAudio;
+    store.currentTime = el.currentTime;
+    store.duration = isFinite(el.duration) ? el.duration : 0;
   }, 250);
 }
 
@@ -68,29 +69,48 @@ export const usePlayerStore = defineStore('player', {
   }),
 
   actions: {
-    async play(trackId: string): Promise<void> {
-      // Req 3.7: fetch Track metadata from DB by ID when needed
+    /** Resolve a track ID to a playable URL */
+    async _resolveTrackUrl(trackId: string): Promise<string | null> {
       const track = await db.getTrack(trackId);
-      if (!track) return;
+      if (!track) return null;
 
-      let url: string;
       if (track.sourceTag === 's3' && track.s3Key) {
-        // Ensure s3Client is configured from saved sources
         await this._ensureS3Configured();
         const presigned = await s3Client.getPresignedUrl(track.s3Key);
-        // Route through backend proxy to avoid CORS issues with Web Audio API
-        const { backend: be } = await import('src/services/backend');
-        url = `${be.baseUrl}/api/s3proxy?url=${encodeURIComponent(presigned)}`;
+        return `${backend.baseUrl}/api/s3proxy?url=${encodeURIComponent(presigned)}`;
       } else if (track.sourceTag === 'server' && track.serverPath) {
-        const { backend } = await import('src/services/backend');
-        url = backend.streamUrl(track.serverPath);
+        return backend.streamUrl(track.serverPath);
       } else if (track.sourceTag === 'local' && track.localPath) {
-        const resolved = await resolveLocalUrl(track.localPath);
-        if (!resolved) return; // handle not available (permission revoked)
-        url = resolved;
-      } else {
-        return;
+        return await resolveLocalUrl(track.localPath);
       }
+      return null;
+    },
+
+    /** Get the next track ID based on current queue position */
+    _getNextTrackId(): string | null {
+      if (this.isLooping && this.currentTrackId) return this.currentTrackId;
+      if (this.isShuffling && this.queue.length > 1) {
+        const candidates = this.queue.filter((id) => id !== this.currentTrackId);
+        return candidates[Math.floor(Math.random() * candidates.length)] ?? null;
+      }
+      const idx = this.currentTrackId ? this.queue.indexOf(this.currentTrackId) : -1;
+      const nextIdx = idx + 1;
+      return nextIdx < this.queue.length ? (this.queue[nextIdx] ?? null) : null;
+    },
+
+    /** Preload the next track for gapless playback */
+    async _preloadNext(): Promise<void> {
+      const nextId = this._getNextTrackId();
+      if (!nextId) return;
+      const url = await this._resolveTrackUrl(nextId);
+      if (url) {
+        _engine.preloadNext(url);
+      }
+    },
+
+    async play(trackId: string): Promise<void> {
+      const url = await this._resolveTrackUrl(trackId);
+      if (!url) return;
 
       // Ensure AudioContext is initialized (autoplay policy requires user gesture)
       _engine.init();
@@ -101,6 +121,9 @@ export const usePlayerStore = defineStore('player', {
 
       // Req 1.8: start 250ms polling interval for currentTime/duration
       _startInterval(this);
+
+      // Preload next track for gapless playback
+      this._preloadNext();
     },
 
     pause(): void {
@@ -111,7 +134,7 @@ export const usePlayerStore = defineStore('player', {
 
     resume(): void {
       // If audio source isn't loaded (e.g. after app restart), re-play the current track
-      if (this.currentTrackId && !_audioElement.src) {
+      if (this.currentTrackId && !_engine.currentAudio.src) {
         this.play(this.currentTrackId);
         return;
       }
@@ -143,25 +166,26 @@ export const usePlayerStore = defineStore('player', {
         return;
       }
 
-      // Shuffle: pick a random track from queue (excluding current)
-      if (this.isShuffling && this.queue.length > 1) {
-        const candidates = this.queue.filter((id) => id !== this.currentTrackId);
-        const randomId = candidates[Math.floor(Math.random() * candidates.length)];
-        if (randomId) {
-          await this.play(randomId);
-          return;
-        }
-      }
-
-      const idx = this.currentTrackId ? this.queue.indexOf(this.currentTrackId) : -1;
-      const nextIdx = idx + 1;
-      if (nextIdx < this.queue.length) {
-        const nextId = this.queue[nextIdx];
-        if (nextId) await this.play(nextId);
-      } else {
+      // Determine next track ID
+      const nextId = this._getNextTrackId();
+      if (!nextId) {
         // Req 1.7: queue exhausted — stop playback
         this.isPlaying = false;
         _stopInterval();
+        return;
+      }
+
+      // Try gapless transition using preloaded audio
+      const gapless = await _engine.playPreloaded();
+      if (gapless) {
+        this.currentTrackId = nextId;
+        this.isPlaying = true;
+        _startInterval(this);
+        // Preload the track after next
+        this._preloadNext();
+      } else {
+        // Fallback: normal play (URL not preloaded or preload failed)
+        await this.play(nextId);
       }
     },
 

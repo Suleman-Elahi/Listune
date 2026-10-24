@@ -38,10 +38,10 @@ function onKeydown(e: KeyboardEvent): void {
       playerStore.setVolume(Math.max(0, playerStore.volume - 0.05));
       break;
     case 'KeyN':
-      playerStore.next();
+      playerStore.next().catch(() => undefined);
       break;
     case 'KeyP':
-      playerStore.previous();
+      playerStore.previous().catch(() => undefined);
       break;
     case 'KeyS':
       playerStore.toggleShuffle();
@@ -57,11 +57,24 @@ onMounted(() => {
   setupMediaSession(playerStore);
 
   // Restore queue from backend
-  playerStore.restoreQueue();
+  playerStore.restoreQueue().catch(() => undefined);
 
-  // Register service worker for PWA
+  // Register the service worker for production PWA builds only. In dev it
+  // caches Vite's HMR client (cache-first), which breaks hot reload and can
+  // leave stale worker code running.
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/sw.js').catch(() => {});
+    if (import.meta.env.PROD) {
+      navigator.serviceWorker.register('/sw.js').catch(() => undefined);
+    } else {
+      void (async () => {
+        const registrations = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(registrations.map((registration) => registration.unregister()));
+        if ('caches' in window) {
+          const keys = await caches.keys();
+          await Promise.all(keys.map((key) => caches.delete(key)));
+        }
+      })().catch(() => undefined);
+    }
   }
 
   // Debounced persist: save queue state 1s after last change
@@ -70,7 +83,7 @@ onMounted(() => {
     () => {
       if (persistTimeout) clearTimeout(persistTimeout);
       persistTimeout = setTimeout(() => {
-        playerStore.persistQueue();
+        playerStore.persistQueue().catch(() => undefined);
       }, 1000);
     },
     { deep: true },

@@ -3,30 +3,97 @@
 </template>
 
 <script setup lang="ts">
-// WMP-style bar visualizer ported from wmpvis.js logic
-// Single canvas with bar + peak dot rendering, physics-based decay
+// WMP-style bar visualizer.
+//
+// The analyser's raw FFT bins are linear in frequency, which leaves most of the
+// upper bins effectively silent for music and makes the right side of the canvas
+// look empty. We aggregate the bins into log-spaced bands instead, so the bars
+// spread across the full width and follow what you actually hear.
 
 import { ref, onMounted, onUnmounted } from 'vue';
 import { audioEngine } from 'src/services/audioEngine';
 
 const canvasRef = ref<HTMLCanvasElement | null>(null);
 
-// Config
-const DEC_SPEED = 2;
-const PRIMARY_SCALE = 1.0;
-const DIFF_SCALE = 0.07;
-const BAR_COLOR = '#a4eb0c';
-const TOP_COLOR = '#dfeaf7';
+const BAR_COUNT = 48;
 const GAP = 1;
+const DECAY = 3;
+const MIN_HZ = 40;
+const MAX_HZ = 16000;
+// Leave headroom at the top so loud bass doesn't touch the card edge.
+const MAX_HEIGHT_RATIO = 0.8;
+const BAR_COLOR = '#a4eb0c';
+const PEAK_COLOR = '#dfeaf7';
 
-// State arrays (pre-allocated for up to 128 bins)
-const lastAud: number[] = new Array(128).fill(0);
-const lastBar: number[] = new Array(128).fill(0);
-const lastTop: number[] = new Array(128).fill(0);
-const topSpeed: number[] = new Array(128).fill(0);
+const lastBar = new Float32Array(BAR_COUNT);
+const lastTop = new Float32Array(BAR_COUNT);
+const topSpeed = new Float32Array(BAR_COUNT);
 
 let idle = false;
 let rafId = 0;
+let freqBuffer: Uint8Array<ArrayBuffer> | null = null;
+let barGradient: CanvasGradient | null = null;
+
+/** Linear interpolation between adjacent FFT bins. */
+function sampleBin(data: Uint8Array, position: number): number {
+  const lower = Math.floor(position);
+  const upper = Math.min(data.length - 1, lower + 1);
+  const fraction = position - lower;
+  const a = data[Math.max(0, lower)] ?? 0;
+  const b = data[upper] ?? a;
+  return a + (b - a) * fraction;
+}
+
+/** Light spatial smoothing so the bar envelope flows instead of jumping. */
+function smoothBands(bands: Float32Array): Float32Array {
+  const smoothed = new Float32Array(BAR_COUNT);
+  for (let i = 0; i < BAR_COUNT; i++) {
+    const current = bands[i]!;
+    const previous = bands[i - 1] ?? current;
+    const next = bands[i + 1] ?? current;
+    smoothed[i] = previous * 0.18 + current * 0.64 + next * 0.18;
+  }
+  return smoothed;
+}
+
+/**
+ * Map linear FFT bins onto log-spaced bars between MIN_HZ and MAX_HZ.
+ * Values are sampled (not repeated from the nearest bin) at several points per
+ * band, then softly saturated so loud bands never clamp into a flat line.
+ */
+function computeBands(freqData: Uint8Array, sampleRate: number, fftSize: number): Float32Array {
+  const bands = new Float32Array(BAR_COUNT);
+  const binHz = sampleRate / fftSize;
+  const maxHz = Math.min(MAX_HZ, sampleRate / 2);
+  const ratio = maxHz / MIN_HZ;
+  const samplesPerBand = 4;
+
+  for (let i = 0; i < BAR_COUNT; i++) {
+    const f0 = MIN_HZ * Math.pow(ratio, i / BAR_COUNT);
+    const f1 = MIN_HZ * Math.pow(ratio, (i + 1) / BAR_COUNT);
+
+    let sum = 0;
+    let peak = 0;
+    for (let sample = 0; sample < samplesPerBand; sample++) {
+      const t = (sample + 0.5) / samplesPerBand;
+      const frequency = f0 * Math.pow(f1 / f0, t);
+      const value = sampleBin(freqData, Math.max(1, frequency / binHz));
+      sum += value;
+      if (value > peak) peak = value;
+    }
+
+    const average = sum / samplesPerBand;
+    const mixed = (average * 0.6 + peak * 0.4) / 255;
+
+    // Gentle high-frequency tilt compensates for the natural spectral roll-off.
+    const tilt = 1 + (i / BAR_COUNT) * 0.35;
+
+    // Exponential soft-knee: approaches 1 but never clamps to a flat top.
+    bands[i] = 1 - Math.exp(-2.2 * mixed * tilt);
+  }
+
+  return smoothBands(bands);
+}
 
 function drawLoop(): void {
   const canvas = canvasRef.value;
@@ -35,135 +102,109 @@ function drawLoop(): void {
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
 
-  // Sync canvas buffer to its displayed CSS size every frame
-  // This is the bulletproof way to ensure drawing fills the element
   const displayW = canvas.clientWidth;
   const displayH = canvas.clientHeight;
-  if (canvas.width !== displayW || canvas.height !== displayH) {
-    canvas.width = displayW;
-    canvas.height = displayH;
-    // Reset top positions after resize
-    lastTop.fill(displayH);
-  }
-
-  const w = canvas.width;
-  const h = canvas.height;
-
-  if (w === 0 || h === 0) {
+  if (displayW === 0 || displayH === 0) {
     rafId = requestAnimationFrame(drawLoop);
     return;
   }
 
-  const analyser = audioEngine.analyserNode;
+  // Render at device pixel ratio, but draw in CSS pixels.
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const pixelW = Math.round(displayW * dpr);
+  const pixelH = Math.round(displayH * dpr);
+  if (canvas.width !== pixelW || canvas.height !== pixelH) {
+    canvas.width = pixelW;
+    canvas.height = pixelH;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    barGradient = ctx.createLinearGradient(0, displayH * 0.1, 0, displayH);
+    barGradient.addColorStop(0, '#d9ff66');
+    barGradient.addColorStop(0.55, BAR_COLOR);
+    barGradient.addColorStop(1, '#2e9e00');
+    lastTop.fill(displayH);
+    topSpeed.fill(0);
+  }
 
-  // Get frequency data
-  let binCount = 63;
-  let audioArray: number[];
+  const w = displayW;
+  const h = displayH;
+  const maxBarHeight = h * MAX_HEIGHT_RATIO;
+
+  const analyser = audioEngine.analyserNode;
+  let bands: Float32Array;
 
   if (analyser) {
-    const rawCount = analyser.frequencyBinCount;
-    const freqData = new Uint8Array(rawCount);
-    analyser.getByteFrequencyData(freqData);
-    // Skip bin 0 (DC offset, always maxed), normalize to 0–1
-    audioArray = [];
-    for (let i = 1; i < rawCount; i++) {
-      audioArray.push(freqData[i]! / 255);
+    if (!freqBuffer || freqBuffer.length !== analyser.frequencyBinCount) {
+      freqBuffer = new Uint8Array(analyser.frequencyBinCount);
     }
-    binCount = audioArray.length;
+    analyser.getByteFrequencyData(freqBuffer);
+    bands = computeBands(freqBuffer, analyser.context.sampleRate, analyser.fftSize);
   } else {
-    audioArray = new Array(binCount).fill(0);
+    bands = new Float32Array(BAR_COUNT);
   }
 
-  // Idle optimization
-  if (idle) {
-    const randomIdx = Math.floor(Math.random() * binCount);
-    if ((audioArray[randomIdx] ?? 0) <= 0.0001) {
-      rafId = requestAnimationFrame(drawLoop);
-      return;
-    }
-    idle = false;
+  let maxBand = 0;
+  for (let i = 0; i < BAR_COUNT; i++) {
+    if (bands[i]! > maxBand) maxBand = bands[i]!;
   }
 
-  // Clear entire canvas
+  // Pause drawing when the signal is silent and all peaks have fallen.
+  if (idle && maxBand < 0.01) {
+    rafId = requestAnimationFrame(drawLoop);
+    return;
+  }
+  if (maxBand >= 0.01) idle = false;
+
   ctx.clearRect(0, 0, w, h);
 
-  // Bar width: uniform, filling the full canvas width
-  const barWidth = w / binCount;
+  let anythingVisible = false;
 
-  let allZero = true;
+  for (let i = 0; i < BAR_COUNT; i++) {
+    const target = bands[i]! * maxBarHeight;
 
-  for (let i = 0; i < binCount; i++) {
-    const amplitude = audioArray[i] ?? 0;
-    const x = barWidth * i;
-    const drawWidth = barWidth - GAP;
-
-    // Bar height with decay
-    const height = Math.min(Math.round(h * amplitude * PRIMARY_SCALE), h);
-
-    if (height > lastBar[i]!) {
-      lastBar[i] = height;
+    // Instant attack, gradual decay.
+    if (target > lastBar[i]!) {
+      lastBar[i] = target;
     } else {
-      lastBar[i]! -= DEC_SPEED;
-      const diff = amplitude - (lastAud[i] ?? 0);
-      if (diff > 0.1) {
-        lastBar[i]! += Math.round(360 * diff * DIFF_SCALE);
-        if (lastBar[i]! > h) lastBar[i] = h;
-      }
+      lastBar[i] = Math.max(target, lastBar[i]! - DECAY);
     }
     if (lastBar[i]! < 0) lastBar[i] = 0;
 
-    // Draw bar
-    ctx.fillStyle = BAR_COLOR;
-    ctx.fillRect(x, h - lastBar[i]!, drawWidth, lastBar[i]!);
+    const barHeight = Math.round(lastBar[i]!);
 
-    // Peak dot with gravity
-    const topPos = h - lastBar[i]! - 2;
-    if (topPos < lastTop[i]!) {
-      lastTop[i] = topPos;
+    // Integer boundaries guarantee the bars tile the full canvas width.
+    const x0 = Math.round((i * w) / BAR_COUNT);
+    const x1 = Math.round(((i + 1) * w) / BAR_COUNT);
+    const barWidth = Math.max(1, x1 - x0 - GAP);
+
+    if (barHeight > 0) {
+      ctx.fillStyle = barGradient ?? BAR_COLOR;
+      ctx.fillRect(x0, h - barHeight, barWidth, barHeight);
+      anythingVisible = true;
+    }
+
+    // Peak dot with accelerating fall.
+    const barTop = h - barHeight;
+    if (barTop < lastTop[i]!) {
+      lastTop[i] = barTop;
       topSpeed[i] = 0;
-      allZero = false;
-    } else if (lastTop[i]! < h - 2) {
-      // Accelerating fall (wmpvis physics)
-      if (topSpeed[i]! > 38) {
-        lastTop[i]! += 5;
-      } else if (topSpeed[i]! > 26) {
-        lastTop[i]! += 4;
-        topSpeed[i]! += 1;
-      } else if (topSpeed[i]! > 18) {
-        lastTop[i]! += 3;
-        topSpeed[i]! += 1;
-      } else if (topSpeed[i]! > 10) {
-        lastTop[i]! += 2;
-        topSpeed[i]! += 1;
-      } else {
-        topSpeed[i]! += 1;
-      }
-      allZero = false;
+    } else if (lastTop[i]! < h) {
+      topSpeed[i] = Math.min(topSpeed[i]! + 0.7, 8);
+      lastTop[i] = Math.min(h, lastTop[i]! + topSpeed[i]!);
     }
 
-    // Draw peak dot
-    if (lastTop[i]! < h - 2) {
-      ctx.fillStyle = TOP_COLOR;
-      ctx.fillRect(x, lastTop[i]!, drawWidth, 2);
+    if (lastTop[i]! < h - 1) {
+      ctx.fillStyle = PEAK_COLOR;
+      ctx.fillRect(x0, lastTop[i]!, barWidth, 2);
+      anythingVisible = true;
     }
-
-    lastAud[i] = amplitude;
   }
 
-  if (allZero) idle = true;
+  if (!anythingVisible && maxBand < 0.005) idle = true;
 
   rafId = requestAnimationFrame(drawLoop);
 }
 
 onMounted(() => {
-  const canvas = canvasRef.value;
-  if (!canvas) return;
-
-  // Initialize canvas buffer to match CSS size
-  canvas.width = canvas.clientWidth;
-  canvas.height = canvas.clientHeight;
-  lastTop.fill(canvas.height);
-
   rafId = requestAnimationFrame(drawLoop);
 });
 

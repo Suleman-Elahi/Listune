@@ -42,6 +42,7 @@ func S3Proxy(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := getS3HTTPClient().Do(req)
 	if err != nil {
+		log.Printf("s3proxy: upstream request failed: %v", err)
 		http.Error(w, `{"error":"upstream request failed"}`, http.StatusBadGateway)
 		return
 	}
@@ -49,6 +50,7 @@ func S3Proxy(w http.ResponseWriter, r *http.Request) {
 
 	// Never proxy redirects: that would let an allowed host bounce us elsewhere.
 	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		log.Printf("s3proxy: refusing upstream redirect to %q", resp.Header.Get("Location"))
 		http.Error(w, `{"error":"upstream redirect refused"}`, http.StatusBadGateway)
 		return
 	}

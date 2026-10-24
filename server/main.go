@@ -36,6 +36,7 @@ func main() {
 
 	// MusicBrainz / AcoustID identification
 	mux.HandleFunc("POST /api/identify", handlers.IdentifyTrack)
+	mux.HandleFunc("POST /api/identify-url", handlers.IdentifyURL)
 
 	// Write ID3 tags to file
 	mux.HandleFunc("POST /api/write-tags", handlers.WriteTags)

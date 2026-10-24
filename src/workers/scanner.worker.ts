@@ -46,7 +46,22 @@ async function putArtwork(trackId: string, blob: Blob): Promise<void> {
 
 // ── S3 ListObjectsV2 ─────────────────────────────────────────────────────────
 
-const AUDIO_EXTENSIONS = new Set(['.mp3', '.flac', '.ogg', '.m4a', '.wav', '.aac']);
+const AUDIO_EXTENSIONS = new Set([
+  '.mp3',
+  '.flac',
+  '.ogg',
+  '.oga',
+  '.opus',
+  '.m4a',
+  '.m4b',
+  '.wav',
+  '.aac',
+  '.wma',
+  '.aiff',
+  '.aif',
+  '.ape',
+  '.webm',
+]);
 
 function decodeXmlEntities(value: string): string {
   return value
@@ -93,6 +108,8 @@ async function listS3Objects(cfg: S3Config): Promise<string[]> {
       const ext = key.slice(key.lastIndexOf('.')).toLowerCase();
       if (AUDIO_EXTENSIONS.has(ext)) {
         keys.push(key);
+      } else {
+        console.debug('[scanner] skipping non-audio S3 object', key);
       }
     }
 
@@ -183,12 +200,14 @@ async function scanS3(cfg: S3Config, sourceName: string): Promise<void> {
           headers: { Range: `bytes=0-${RANGE_BYTES - 1}` },
         });
         if (!response.ok && response.status !== 206) {
+          console.warn('[scanner] S3 fetch failed', key, response.status, response.statusText);
           errors++;
           continue;
         }
         totalSize = totalSizeFromResponse(response);
         buffer = await response.arrayBuffer();
-      } catch {
+      } catch (err) {
+        console.warn('[scanner] S3 fetch error', key, err);
         errors++;
         continue;
       }

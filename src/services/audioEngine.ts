@@ -8,8 +8,10 @@ interface AudioEngineInterface {
   destroy(): void;
   loadAndPlay(url: string): Promise<void>;
   preloadNext(url: string): void;
+  clearPreload(): void;
   playPreloaded(): Promise<boolean>;
   pause(): void;
+  stop(): void;
   resume(): void;
   seek(seconds: number): void;
   setVolume(level: number): void;
@@ -73,8 +75,14 @@ const audioEngine: AudioEngineInterface = {
 
     _audioContext = new AudioContext();
     _analyserNode = _audioContext.createAnalyser();
-    _analyserNode.fftSize = 128;
+    // 4096 gives 2048 bins so the low log-spaced bands resolve distinct
+    // frequencies instead of repeating the same bin into a flat plateau.
+    _analyserNode.fftSize = 4096;
     _analyserNode.smoothingTimeConstant = 0.8;
+    // Default maxDecibels (-30 dB) saturates most music bins at 255, which is
+    // what produced the flat clipped tops. Widen the range for more headroom.
+    _analyserNode.minDecibels = -90;
+    _analyserNode.maxDecibels = -10;
 
     // Create gain nodes for crossfade control
     _gainA = _audioContext.createGain();
@@ -166,7 +174,6 @@ const audioEngine: AudioEngineInterface = {
 
     // Swap active/preload
     const oldActive = _activeAudio;
-    const oldActiveGain = _getActiveGain();
     _activeAudio = _preloadAudio;
     _preloadAudio = oldActive;
 
@@ -196,6 +203,23 @@ const audioEngine: AudioEngineInterface = {
   pause(): void {
     _activeAudio.pause();
     _isPlaying = false;
+  },
+
+  /** Stop playback and release the current/preloaded media. */
+  stop(): void {
+    _isPlaying = false;
+    _activeAudio.pause();
+    _activeAudio.src = '';
+    _preloadAudio.pause();
+    _preloadAudio.src = '';
+    _preloadedUrl = null;
+  },
+
+  /** Drop the preloaded next track without affecting the active one. */
+  clearPreload(): void {
+    _preloadAudio.pause();
+    _preloadAudio.src = '';
+    _preloadedUrl = null;
   },
 
   resume(): void {

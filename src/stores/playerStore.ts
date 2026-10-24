@@ -6,8 +6,8 @@ import { markRaw, watch } from 'vue';
 import { audioEngine } from 'src/services/audioEngine';
 import { db } from 'src/services/db';
 import { buildPresignedUrl, proxyUrlFor } from 'src/services/sigv4';
+import { resolveS3Config } from 'src/services/s3Sources';
 import { backend } from 'src/services/backend';
-import type { S3Config } from 'src/types/models';
 
 // Resolve a local track path to a blob URL using stored FileSystemDirectoryHandle
 async function resolveLocalUrl(localPath: string): Promise<string | null> {
@@ -31,18 +31,6 @@ async function resolveLocalUrl(localPath: string): Promise<string | null> {
     }
   }
   return null;
-}
-
-// Resolve the saved S3 credentials for a track. Tracks store their source name
-// so multiple buckets/endpoints can coexist; fall back to the first S3 source
-// for libraries scanned before source names were recorded.
-async function resolveS3Config(sourceName?: string): Promise<S3Config | null> {
-  const sources = await db.getSources();
-  const s3Sources = sources.filter((s) => s.type === 's3');
-  const source =
-    (sourceName ? s3Sources.find((s) => s.name === sourceName) : undefined) ??
-    (s3Sources.length === 1 ? s3Sources[0] : undefined);
-  return source ? (source.config as S3Config) : null;
 }
 // Req 3.8: Wrap non-serializable audio objects with markRaw();
 // stored as a module-level variable, outside the Pinia state tree
@@ -152,6 +140,16 @@ export const usePlayerStore = defineStore('player', {
       _stopInterval();
     },
 
+    /** Stop playback and clear the current track. */
+    stop(): void {
+      _engine.stop();
+      this.isPlaying = false;
+      this.currentTrackId = null;
+      this.currentTime = 0;
+      this.duration = 0;
+      _stopInterval();
+    },
+
     resume(): void {
       // If audio source isn't loaded (e.g. after app restart), re-play the current track
       if (this.currentTrackId && !_engine.currentAudio.src) {
@@ -238,6 +236,23 @@ export const usePlayerStore = defineStore('player', {
 
     enqueue(id: string): void {
       this.queue.push(id);
+    },
+
+    /** Drop a track from the queue; stops playback if it was the current track. */
+    removeTrack(id: string): void {
+      const index = this.queue.indexOf(id);
+      if (index !== -1) this.queue.splice(index, 1);
+
+      if (this.currentTrackId === id) {
+        this.stop();
+        return;
+      }
+
+      // The removed track may have been preloaded as the next one.
+      _engine.clearPreload();
+      if (this.isPlaying) {
+        this._preloadNext().catch(() => undefined);
+      }
     },
 
     /** Persist queue + current track to backend */

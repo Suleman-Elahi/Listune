@@ -26,6 +26,9 @@ fpcalc -version
 | GET | `/auth/google` | Redirects to Google OAuth consent |
 | GET | `/auth/google/callback` | Exchanges code, fetches profile, redirects to frontend |
 | POST | `/api/identify` | Accepts audio file upload, fingerprints with fpcalc, queries AcoustID → MusicBrainz |
+| POST | `/api/identify-url` | Downloads audio from a URL (e.g. presigned S3), fingerprints it, queries AcoustID → MusicBrainz |
+
+Both identify endpoints accept optional `title`/`artist` hints. When AcoustID has no fingerprint match (common for new or alternate releases), the backend falls back to a MusicBrainz text search using those hints, with duration/version filtering to avoid DJ mixes, live versions, and edits.
 
 ### POST /api/identify
 

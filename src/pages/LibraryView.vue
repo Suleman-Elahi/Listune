@@ -336,15 +336,18 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue';
 import { useRouter } from 'vue-router';
+import { useQuasar } from 'quasar';
 import { useLibraryStore } from 'src/stores/libraryStore';
 import { usePlayerStore } from 'src/stores/playerStore';
 import { db } from 'src/services/db';
 import AddSourceDialog from 'src/components/AddSourceDialog.vue';
 import BottomNav from 'src/components/BottomNav.vue';
-import { backend } from 'src/services/backend';
+import { backend, type IdentifyResult } from 'src/services/backend';
+import { getPresignedTrackUrl } from 'src/services/s3Sources';
 import type { Track } from 'src/types/models';
 
 const router = useRouter();
+const $q = useQuasar();
 const libraryStore = useLibraryStore();
 const playerStore = usePlayerStore();
 
@@ -525,32 +528,10 @@ function playNext(id: string) {
 }
 
 async function removeTrack(id: string) {
-  // Remove from IndexedDB
-  const database = await import('src/services/db').then((m) => m.db);
-  const track = await database.getTrack(id);
-  if (track?.artworkId) {
-    // Remove artwork too
-    try {
-      const idbModule = await import('idb');
-      const dbInstance = await idbModule.openDB('music-player-db', 1);
-      await dbInstance.delete('artwork', track.artworkId);
-    } catch { /* ignore */ }
-  }
-  // Delete the track record
-  const idbModule = await import('idb');
-  const dbInstance = await idbModule.openDB('music-player-db', 1);
-  await dbInstance.delete('tracks', id);
-
-  // Remove from queue if present
-  const queueIdx = playerStore.queue.indexOf(id);
-  if (queueIdx !== -1) {
-    const newQueue = [...playerStore.queue];
-    newQueue.splice(queueIdx, 1);
-    playerStore.setQueue(newQueue);
-  }
-
-  // Refresh library
-  libraryStore.search(searchQuery.value);
+  await db.deleteTrack(id);
+  // Stops playback if this was the current track and clears any preload.
+  playerStore.removeTrack(id);
+  libraryStore.search(searchQuery.value).catch(() => undefined);
 }
 
 const trackDetailDialog = ref(false);
@@ -561,18 +542,84 @@ function showTrackDetails(track: Track) {
   trackDetailDialog.value = true;
 }
 
-async function identifySingle(track: Track) {
-  let result;
+function notifyError(message: string): void {
+  $q.notify({ type: 'negative', message, position: 'top', timeout: 5000 });
+}
+
+function notifySuccess(message: string): void {
+  $q.notify({ type: 'positive', message, position: 'top', timeout: 3000 });
+}
+
+/** Strip common download/upload noise from a filename or tag for search hints. */
+function cleanIdentifyText(value: string): string {
+  return value
+    .replace(
+      /[([][^\])]*(official|lyrics?|audio|video|visuali[sz]er|hd|hq|explicit|clean)[^\])]*[\])]/gi,
+      ' ',
+    )
+    .replace(/_/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+const TITLE_SEPARATORS = [' - ', ' \u2013 ', ' \u2014 '];
+
+/** Remove a leading/trailing "Artist - " / " - Artist" from a title. */
+function removeArtistFromTitle(title: string, artist: string): string {
+  if (!artist) return title;
+  const lowerTitle = title.toLowerCase();
+  const lowerArtist = artist.toLowerCase();
+
+  for (const separator of TITLE_SEPARATORS) {
+    if (lowerTitle.startsWith(lowerArtist + separator)) {
+      return title.slice(artist.length + separator.length).trim();
+    }
+    if (lowerTitle.endsWith(separator + lowerArtist)) {
+      return title.slice(0, title.length - separator.length - artist.length).trim();
+    }
+  }
+  return title;
+}
+
+function getIdentifyHints(track: Track): { title?: string; artist?: string } {
+  let title = cleanIdentifyText(track.title || '');
+  let artist = cleanIdentifyText(track.artist || '');
+
+  // Tags often contain "Artist - Title (Official Video)" in the title field.
+  title = removeArtistFromTitle(title, artist);
+
+  // Filename-style "Artist - Title" when no artist tag exists.
+  if (!artist) {
+    for (const separator of TITLE_SEPARATORS) {
+      const index = title.indexOf(separator);
+      if (index > 0) {
+        artist = title.slice(0, index).trim();
+        title = title.slice(index + separator.length).trim();
+        title = removeArtistFromTitle(title, artist);
+        break;
+      }
+    }
+  }
+
+  const hints: { title?: string; artist?: string } = {};
+  if (title) hints.title = title;
+  if (artist) hints.artist = artist;
+  return hints;
+}
+
+/** Resolve whichever source a track belongs to and send it for identification. */
+async function identifyTrackSource(track: Track): Promise<IdentifyResult | null> {
+  const hints = getIdentifyHints(track);
 
   if (track.sourceTag === 'server' && track.serverPath) {
-    // Server-side file — backend fetches and fingerprints it
-    result = await backend.identifyServerFile(track.serverPath);
-  } else if (track.sourceTag === 'local' && track.localPath) {
-    let blob: Blob | null = null;
+    return backend.identifyServerFile(track.serverPath, hints);
+  }
+
+  if (track.sourceTag === 'local' && track.localPath) {
     const sources = await db.getSources();
     for (const source of sources) {
-      if (source.type !== 'local') continue;
-      const handle = (source.config as { handle: FileSystemDirectoryHandle }).handle;
+      if (source.type !== 'local' || !('handle' in source.config)) continue;
+      const handle = source.config.handle;
       try {
         const parts = track.localPath.split('/').filter(Boolean);
         let dir: FileSystemDirectoryHandle = handle;
@@ -580,19 +627,27 @@ async function identifySingle(track: Track) {
           dir = await dir.getDirectoryHandle(parts[i]!);
         }
         const fileHandle = await dir.getFileHandle(parts[parts.length - 1]!);
-        blob = await fileHandle.getFile();
-        break;
-      } catch { /* try next */ }
+        const blob = await fileHandle.getFile();
+        const filename = parts[parts.length - 1] || 'track.mp3';
+        return backend.identifyTrack(blob, filename, hints);
+      } catch {
+        // try the next local source
+      }
     }
-    if (!blob) return;
-    const filename = track.localPath.split('/').pop() || 'track.mp3';
-    result = await backend.identifyTrack(blob, filename);
-  } else {
-    return;
+    return null;
   }
 
-  if (!result || result.error) return;
+  if (track.sourceTag === 's3' && track.s3Key) {
+    const url = await getPresignedTrackUrl(track);
+    if (!url) return null;
+    const filename = track.s3Key.split('/').pop() || 'track.mp3';
+    return backend.identifyUrl(url, filename, hints);
+  }
 
+  return null;
+}
+
+async function applyIdentifyResult(track: Track, result: IdentifyResult): Promise<Track> {
   const updated: Track = {
     ...track,
     title: result.title || track.title,
@@ -600,34 +655,67 @@ async function identifySingle(track: Track) {
     album: result.album || track.album,
   };
 
-  // Download and store cover art if available
   if (result.coverArtUrl && !track.artworkId) {
     try {
       const artResp = await fetch(result.coverArtUrl);
       if (artResp.ok) {
-        const artBlob = await artResp.blob();
-        await db.putArtwork(track.id, artBlob);
+        await db.putArtwork(track.id, await artResp.blob());
         updated.artworkId = track.id;
       }
-    } catch { /* cover art fetch failed, non-fatal */ }
+    } catch {
+      // cover art is optional
+    }
   }
 
   await db.putTrack(updated);
+  return updated;
+}
 
-  // Write tags to the actual file if it's on the server
-  if (track.sourceTag === 'server' && track.serverPath) {
-    await backend.writeTags({
-      filePath: track.serverPath,
-      title: result.title,
-      artist: result.artist,
-      album: result.album,
-      year: result.year,
-      genre: result.genre,
-      coverArtUrl: result.coverArtUrl,
-    });
+async function identifySingle(track: Track): Promise<void> {
+  const dismiss = $q.notify({
+    type: 'ongoing',
+    message: `Identifying ${track.title}...`,
+    timeout: 0,
+    position: 'top',
+  });
+
+  try {
+    const result = await identifyTrackSource(track);
+    if (!result) {
+      notifyError('No readable audio source for this track');
+      return;
+    }
+    if (result.error) {
+      notifyError(result.error);
+      return;
+    }
+
+    const updated = await applyIdentifyResult(track, result);
+
+    // Write tags to the actual file when it lives on the server.
+    if (track.sourceTag === 'server' && track.serverPath) {
+      try {
+        await backend.writeTags({
+          filePath: track.serverPath,
+          title: result.title,
+          artist: result.artist,
+          album: result.album,
+          year: result.year,
+          genre: result.genre,
+          coverArtUrl: result.coverArtUrl,
+        });
+      } catch {
+        // best effort
+      }
+    }
+
+    notifySuccess(`Identified: ${updated.title}`);
+    libraryStore.search(searchQuery.value).catch(() => undefined);
+  } catch (err) {
+    notifyError(`Identification failed: ${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    dismiss();
   }
-
-  libraryStore.search(searchQuery.value);
 }
 
 async function loadArtwork(trackId: string) {
@@ -658,7 +746,11 @@ watch(() => libraryStore.results, (results) => {
 }, { immediate: true });
 
 watch(() => libraryStore.isScanning, (scanning) => {
-  if (!scanning) libraryStore.search(searchQuery.value);
+  if (scanning) return;
+  libraryStore.search(searchQuery.value).catch(() => undefined);
+  // Also refresh the grouped views so newly scanned tracks appear there.
+  if (activeTab.value === 'Artists') loadArtists().catch(() => undefined);
+  else if (activeTab.value === 'Albums') loadAlbums().catch(() => undefined);
 });
 
 // ── AcoustID identification ──
@@ -674,66 +766,32 @@ async function identifyUntagged(): Promise<void> {
   if (untagged.length === 0) return;
 
   isIdentifying.value = true;
+  let identified = 0;
+  let failed = 0;
 
   for (const track of untagged) {
     try {
-      // Get the audio file blob
-      let blob: Blob | null = null;
-
-      if (track.sourceTag === 'local' && track.localPath) {
-        const sources = await db.getSources();
-        for (const source of sources) {
-          if (source.type !== 'local') continue;
-          const handle = (source.config as { handle: FileSystemDirectoryHandle }).handle;
-          try {
-            const parts = track.localPath.split('/').filter(Boolean);
-            let dir: FileSystemDirectoryHandle = handle;
-            for (let i = 0; i < parts.length - 1; i++) {
-              dir = await dir.getDirectoryHandle(parts[i]!);
-            }
-            const fileHandle = await dir.getFileHandle(parts[parts.length - 1]!);
-            blob = await fileHandle.getFile();
-            break;
-          } catch { /* try next source */ }
-        }
+      const result = await identifyTrackSource(track);
+      if (!result || result.error) {
+        failed++;
+        continue;
       }
-
-      if (!blob) continue;
-
-      const filename = track.localPath?.split('/').pop() || 'track.mp3';
-      const result = await backend.identifyTrack(blob, filename);
-
-      if (result.error) continue;
-
-      // Update track in DB with identified metadata
-      const updated: Track = {
-        ...track,
-        title: result.title || track.title,
-        artist: result.artist || track.artist,
-        album: result.album || track.album,
-      };
-
-      // Download and store cover art if available
-      if (result.coverArtUrl && !track.artworkId) {
-        try {
-          const artResp = await fetch(result.coverArtUrl);
-          if (artResp.ok) {
-            const artBlob = await artResp.blob();
-            await db.putArtwork(track.id, artBlob);
-            updated.artworkId = track.id;
-          }
-        } catch { /* cover art fetch failed, non-fatal */ }
-      }
-
-      await db.putTrack(updated);
+      await applyIdentifyResult(track, result);
+      identified++;
     } catch {
-      // skip failed tracks
+      failed++;
     }
   }
 
   isIdentifying.value = false;
-  // Refresh library results
-  libraryStore.search(searchQuery.value);
+  await libraryStore.search(searchQuery.value).catch(() => undefined);
+
+  if (identified > 0) {
+    notifySuccess(`Identified ${identified} track${identified === 1 ? '' : 's'}`);
+  }
+  if (failed > 0) {
+    notifyError(`${failed} track${failed === 1 ? '' : 's'} could not be identified`);
+  }
 }
 
 onMounted(() => { libraryStore.search(''); });

@@ -62,6 +62,19 @@ export const db = {
     return filter.limit !== undefined ? sliced.slice(0, filter.limit) : sliced;
   },
 
+  /** Delete a track and its artwork. */
+  async deleteTrack(id: string): Promise<void> {
+    const database = await getDB();
+    const track = await database.get('tracks', id);
+
+    const tx = database.transaction(['tracks', 'artwork'], 'readwrite');
+    await Promise.all([
+      tx.objectStore('tracks').delete(id),
+      ...(track?.artworkId ? [tx.objectStore('artwork').delete(track.artworkId)] : []),
+      tx.done,
+    ]);
+  },
+
   async putArtwork(trackId: string, blob: Blob): Promise<void> {
     const database = await getDB();
     await database.put('artwork', blob, trackId);

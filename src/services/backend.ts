@@ -19,6 +19,11 @@ export interface IdentifyResult {
   error?: string;
 }
 
+export interface IdentifyHints {
+  title?: string;
+  artist?: string;
+}
+
 export interface ServerTrackMeta {
   id: string;
   title: string;
@@ -94,9 +99,15 @@ export const backend = {
 
   /** Identify a track by uploading an audio file to the backend.
    *  Backend runs fpcalc → AcoustID → MusicBrainz and returns metadata. */
-  async identifyTrack(audioBlob: Blob, filename: string): Promise<IdentifyResult> {
+  async identifyTrack(
+    audioBlob: Blob,
+    filename: string,
+    hints?: IdentifyHints,
+  ): Promise<IdentifyResult> {
     const form = new FormData();
     form.append('audio', audioBlob, filename);
+    if (hints?.title) form.append('title', hints.title);
+    if (hints?.artist) form.append('artist', hints.artist);
     const res = await fetch(`${BASE_URL}/api/identify`, {
       method: 'POST',
       body: form,
@@ -104,14 +115,28 @@ export const backend = {
     return res.json() as Promise<IdentifyResult>;
   },
 
+  /** Identify an audio file by URL (e.g. a presigned S3 URL); the backend downloads it. */
+  async identifyUrl(
+    url: string,
+    filename: string,
+    hints?: IdentifyHints,
+  ): Promise<IdentifyResult> {
+    const res = await fetch(`${BASE_URL}/api/identify-url`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url, filename, title: hints?.title, artist: hints?.artist }),
+    });
+    return res.json() as Promise<IdentifyResult>;
+  },
+
   /** Identify a server-side file by path (no upload needed). */
-  async identifyServerFile(serverPath: string): Promise<IdentifyResult> {
+  async identifyServerFile(serverPath: string, hints?: IdentifyHints): Promise<IdentifyResult> {
     // Fetch the file from the stream endpoint and re-upload for identification
     const res = await fetch(`${BASE_URL}/api/stream?path=${encodeURIComponent(serverPath)}`);
     if (!res.ok) return { error: 'failed to fetch file' };
     const blob = await res.blob();
     const filename = serverPath.split('/').pop() || 'track.mp3';
-    return this.identifyTrack(blob, filename);
+    return this.identifyTrack(blob, filename, hints);
   },
 
   /** Check if backend is reachable. */

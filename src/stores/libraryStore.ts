@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia';
-import { ref } from 'vue';
+import { ref, toRaw } from 'vue';
 import type { Track, ScanProgress, S3Config, LocalSource } from 'src/types/models';
 import { db } from 'src/services/db';
 
@@ -55,7 +55,8 @@ export const useLibraryStore = defineStore('library', () => {
       worker.terminate();
     };
 
-    worker.postMessage({ type: 'scan', source, sourceName });
+    // Sources can come from reactive UI state; proxies are not structured-cloneable.
+    worker.postMessage({ type: 'scan', source: toRaw(source), sourceName });
   }
 
   return {

@@ -69,19 +69,20 @@ export const backend = {
 
   /** Write ID3 tags to a file (local server path or S3). */
   async writeTags(params: {
-    filePath?: string;
-    s3Key?: string;
-    s3Endpoint?: string;
-    s3Bucket?: string;
-    s3Region?: string;
-    s3Access?: string;
-    s3Secret?: string;
-    title?: string;
-    artist?: string;
-    album?: string;
-    year?: string;
-    genre?: string;
-    coverArtUrl?: string;
+    filePath?: string | undefined;
+    s3Key?: string | undefined;
+    s3Endpoint?: string | undefined;
+    s3Bucket?: string | undefined;
+    s3Region?: string | undefined;
+    s3Access?: string | undefined;
+    s3Secret?: string | undefined;
+    s3SessionToken?: string | undefined;
+    title?: string | undefined;
+    artist?: string | undefined;
+    album?: string | undefined;
+    year?: string | undefined;
+    genre?: string | undefined;
+    coverArtUrl?: string | undefined;
   }): Promise<{ success: boolean; error?: string }> {
     const res = await fetch(`${BASE_URL}/api/write-tags`, {
       method: 'POST',

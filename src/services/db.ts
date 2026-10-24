@@ -129,4 +129,39 @@ export const db = {
     const database = await getDB();
     return database.getAll('sources');
   },
+
+  async getTracksBySource(sourceName: string): Promise<Track[]> {
+    const database = await getDB();
+    const all = await database.getAll('tracks');
+    return all.filter((t) => t.sourceName === sourceName);
+  },
+
+  /** Remove a saved source together with the tracks and artwork it produced. */
+  async deleteSource(name: string): Promise<void> {
+    const database = await getDB();
+    const allTracks = await database.getAll('tracks');
+    const sources = await database.getAll('sources');
+    const source = sources.find((s) => s.name === name);
+    const isOnlyOfType = source
+      ? sources.filter((s) => s.type === source.type).length === 1
+      : false;
+
+    const tracks = allTracks.filter(
+      (t) =>
+        t.sourceName === name ||
+        // Tracks scanned before source names were stored have no owner; if this
+        // was the only source of that type, they can safely be attributed to it.
+        (!t.sourceName && isOnlyOfType && t.sourceTag === source?.type),
+    );
+
+    const tx = database.transaction(['tracks', 'artwork', 'sources'], 'readwrite');
+    await Promise.all([
+      ...tracks.map((t) => tx.objectStore('tracks').delete(t.id)),
+      ...tracks
+        .filter((t) => t.artworkId)
+        .map((t) => tx.objectStore('artwork').delete(t.artworkId!)),
+      tx.objectStore('sources').delete(name),
+      tx.done,
+    ]);
+  },
 };

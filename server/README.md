@@ -82,3 +82,4 @@ RUN apk add --no-cache ca-certificates chromaprint
 | `GOOGLE_REDIRECT_URI` | For auth | OAuth callback URL |
 | `ACOUSTID_API_KEY` | For identify | AcoustID application API key |
 | `FRONTEND_ORIGIN` | No | CORS origin (default: http://localhost:9000) |
+| `S3_ALLOWED_HOSTS` | No | Comma-separated hosts allowed for `/api/s3proxy` and S3 tag writes. When empty, only public hosts are allowed. Add local S3 hosts here (e.g. `minio.local:9000`). Link-local/cloud-metadata addresses are always blocked. |

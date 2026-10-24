@@ -16,7 +16,7 @@ A dark-themed, mobile-first music player PWA built with Vue 3, Quasar, and TypeS
 
 ### Library
 - Add local folders via the File System Access API (no upload needed)
-- Add S3 buckets as audio sources (AWS SigV4 pre-signed URLs)
+- Add S3 buckets as audio sources (AWS SigV4 pre-signed URLs, multiple buckets, optional session tokens)
 - Background scanner worker reads ID3/Vorbis/MP4 tags (title, artist, album, artwork, duration)
 - Falls back to filename when tags are missing
 - Search and filter tracks in real time

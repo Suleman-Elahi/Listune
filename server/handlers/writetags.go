@@ -2,9 +2,7 @@ package handlers
 
 import (
 	"bytes"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -22,12 +20,13 @@ type WriteTagsRequest struct {
 	// For server-side files
 	FilePath string `json:"filePath,omitempty"`
 	// For S3-hosted files
-	S3Key      string `json:"s3Key,omitempty"`
-	S3Endpoint string `json:"s3Endpoint,omitempty"`
-	S3Bucket   string `json:"s3Bucket,omitempty"`
-	S3Region   string `json:"s3Region,omitempty"`
-	S3Access   string `json:"s3Access,omitempty"`
-	S3Secret   string `json:"s3Secret,omitempty"`
+	S3Key          string `json:"s3Key,omitempty"`
+	S3Endpoint     string `json:"s3Endpoint,omitempty"`
+	S3Bucket       string `json:"s3Bucket,omitempty"`
+	S3Region       string `json:"s3Region,omitempty"`
+	S3Access       string `json:"s3Access,omitempty"`
+	S3Secret       string `json:"s3Secret,omitempty"`
+	S3SessionToken string `json:"s3SessionToken,omitempty"`
 	// Metadata to write
 	Title       string `json:"title,omitempty"`
 	Artist      string `json:"artist,omitempty"`
@@ -60,7 +59,7 @@ func WriteTags(w http.ResponseWriter, r *http.Request) {
 
 	// Route to appropriate handler
 	if req.S3Key != "" {
-		writeTagsS3(w, &req)
+		writeTagsS3(w, r, &req)
 	} else {
 		writeTagsLocal(w, &req)
 	}
@@ -90,7 +89,7 @@ func writeTagsLocal(w http.ResponseWriter, req *WriteTagsRequest) {
 }
 
 // writeTagsS3 downloads from S3, writes tags, re-uploads.
-func writeTagsS3(w http.ResponseWriter, req *WriteTagsRequest) {
+func writeTagsS3(w http.ResponseWriter, r *http.Request, req *WriteTagsRequest) {
 	ext := strings.ToLower(filepath.Ext(req.S3Key))
 	if ext != ".mp3" {
 		writeJSON(w, http.StatusBadRequest, WriteTagsResponse{
@@ -105,13 +104,18 @@ func writeTagsS3(w http.ResponseWriter, req *WriteTagsRequest) {
 	}
 
 	// 1. Download from S3
-	downloadURL, err := generatePresignedURL(req.S3Endpoint, req.S3Bucket, req.S3Region, req.S3Access, req.S3Secret, req.S3Key, "GET")
+	downloadURL, err := generatePresignedURL(req.S3Endpoint, req.S3Bucket, req.S3Region, req.S3Access, req.S3Secret, req.S3SessionToken, req.S3Key, "GET")
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, WriteTagsResponse{Error: "failed to generate download URL: " + err.Error()})
 		return
 	}
 
-	resp, err := http.Get(downloadURL)
+	reqDownload, err := http.NewRequestWithContext(r.Context(), http.MethodGet, downloadURL, nil)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, WriteTagsResponse{Error: "failed to build download request"})
+		return
+	}
+	resp, err := getS3HTTPClient().Do(reqDownload)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, WriteTagsResponse{Error: "failed to download from S3: " + err.Error()})
 		return
@@ -146,7 +150,7 @@ func writeTagsS3(w http.ResponseWriter, req *WriteTagsRequest) {
 	}
 
 	// 3. Re-upload to S3
-	if err := uploadToS3(req.S3Endpoint, req.S3Bucket, req.S3Region, req.S3Access, req.S3Secret, req.S3Key, tmpPath); err != nil {
+	if err := uploadToS3(r.Context(), req.S3Endpoint, req.S3Bucket, req.S3Region, req.S3Access, req.S3Secret, req.S3SessionToken, req.S3Key, tmpPath); err != nil {
 		writeJSON(w, http.StatusBadGateway, WriteTagsResponse{Error: "failed to upload to S3: " + err.Error()})
 		return
 	}
@@ -200,8 +204,13 @@ func applyTags(filePath string, req *WriteTagsRequest) error {
 }
 
 // uploadToS3 uploads a local file to S3 using a PUT request with SigV4.
-func uploadToS3(endpoint, bucket, region, accessKey, secretKey, key, localPath string) error {
+func uploadToS3(ctx context.Context, endpoint, bucket, region, accessKey, secretKey, sessionToken, key, localPath string) error {
 	fileData, err := os.ReadFile(localPath)
+	if err != nil {
+		return err
+	}
+
+	parsed, err := parseS3Endpoint(endpoint)
 	if err != nil {
 		return err
 	}
@@ -209,107 +218,101 @@ func uploadToS3(endpoint, bucket, region, accessKey, secretKey, key, localPath s
 	now := time.Now().UTC()
 	dateStamp := now.Format("20060102")
 	amzDate := now.Format("20060102T150405Z")
-
-	endpointURL := strings.TrimRight(endpoint, "/")
-	host := strings.TrimPrefix(strings.TrimPrefix(endpointURL, "https://"), "http://")
-	canonicalURI := "/" + bucket + "/" + key
-
-	// SHA256 of the body
+	canonicalURI := canonicalS3URI(parsed, bucket, key)
 	payloadHash := sha256Hex(fileData)
+	contentType := contentTypeForFile(localPath)
 
-	// Canonical headers
-	canonicalHeaders := fmt.Sprintf("host:%s\nx-amz-content-sha256:%s\nx-amz-date:%s\n", host, payloadHash, amzDate)
+	canonicalHeaders := fmt.Sprintf(
+		"host:%s\nx-amz-content-sha256:%s\nx-amz-date:%s\n",
+		parsed.host, payloadHash, amzDate,
+	)
 	signedHeaders := "host;x-amz-content-sha256;x-amz-date"
+	if sessionToken != "" {
+		canonicalHeaders += "x-amz-security-token:" + sessionToken + "\n"
+		signedHeaders += ";x-amz-security-token"
+	}
 
-	// Canonical request
-	canonicalRequest := fmt.Sprintf("PUT\n%s\n\n%s\n%s\n%s", canonicalURI, canonicalHeaders, signedHeaders, payloadHash)
-
-	// String to sign
 	credentialScope := fmt.Sprintf("%s/%s/s3/aws4_request", dateStamp, region)
-	stringToSign := fmt.Sprintf("AWS4-HMAC-SHA256\n%s\n%s\n%s", amzDate, credentialScope, sha256Hex([]byte(canonicalRequest)))
+	canonicalRequest := strings.Join([]string{
+		http.MethodPut,
+		canonicalURI,
+		"",
+		canonicalHeaders,
+		signedHeaders,
+		payloadHash,
+	}, "\n")
 
-	// Signing key
-	kDate := hmacSHA256([]byte("AWS4"+secretKey), dateStamp)
-	kRegion := hmacSHA256(kDate, region)
-	kService := hmacSHA256(kRegion, "s3")
-	kSigning := hmacSHA256(kService, "aws4_request")
+	stringToSign := strings.Join([]string{
+		"AWS4-HMAC-SHA256",
+		amzDate,
+		credentialScope,
+		sha256Hex([]byte(canonicalRequest)),
+	}, "\n")
 
-	signature := hex.EncodeToString(hmacSHA256(kSigning, stringToSign))
+	signature := fmt.Sprintf("%x", hmacSHA256(signingKey(secretKey, dateStamp, region), stringToSign))
+	authorization := fmt.Sprintf(
+		"AWS4-HMAC-SHA256 Credential=%s/%s, SignedHeaders=%s, Signature=%s",
+		accessKey, credentialScope, signedHeaders, signature,
+	)
 
-	authorization := fmt.Sprintf("AWS4-HMAC-SHA256 Credential=%s/%s, SignedHeaders=%s, Signature=%s",
-		accessKey, credentialScope, signedHeaders, signature)
-
-	// Make the PUT request
-	reqURL := endpointURL + canonicalURI
-	req, err := http.NewRequest("PUT", reqURL, bytes.NewReader(fileData))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, parsed.origin+canonicalURI, bytes.NewReader(fileData))
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Host", host)
 	req.Header.Set("X-Amz-Content-Sha256", payloadHash)
 	req.Header.Set("X-Amz-Date", amzDate)
 	req.Header.Set("Authorization", authorization)
-	req.Header.Set("Content-Type", "audio/mpeg")
+	req.Header.Set("Content-Type", contentType)
+	if sessionToken != "" {
+		req.Header.Set("X-Amz-Security-Token", sessionToken)
+	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := getS3HTTPClient().Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 300 {
-		respBody, _ := io.ReadAll(resp.Body)
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		return fmt.Errorf("S3 PUT returned %d: %s", resp.StatusCode, string(respBody))
 	}
 
 	return nil
 }
 
-// generatePresignedURL creates a presigned GET URL for S3.
-func generatePresignedURL(endpoint, bucket, region, accessKey, secretKey, key, method string) (string, error) {
-	now := time.Now().UTC()
-	dateStamp := now.Format("20060102")
-	amzDate := now.Format("20060102T150405Z")
-	credentialScope := fmt.Sprintf("%s/%s/s3/aws4_request", dateStamp, region)
-	credential := fmt.Sprintf("%s/%s", accessKey, credentialScope)
-
-	endpointURL := strings.TrimRight(endpoint, "/")
-	host := strings.TrimPrefix(strings.TrimPrefix(endpointURL, "https://"), "http://")
-	canonicalURI := "/" + bucket + "/" + key
-
-	queryParams := fmt.Sprintf("X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=%s&X-Amz-Date=%s&X-Amz-Expires=3600&X-Amz-SignedHeaders=host",
-		strings.ReplaceAll(credential, "/", "%2F"), amzDate)
-
-	canonicalHeaders := fmt.Sprintf("host:%s\n", host)
-	signedHeaders := "host"
-
-	canonicalRequest := fmt.Sprintf("%s\n%s\n%s\n%s\n%s\nUNSIGNED-PAYLOAD", method, canonicalURI, queryParams, canonicalHeaders, signedHeaders)
-
-	stringToSign := fmt.Sprintf("AWS4-HMAC-SHA256\n%s\n%s\n%s", amzDate, credentialScope, sha256Hex([]byte(canonicalRequest)))
-
-	kDate := hmacSHA256([]byte("AWS4"+secretKey), dateStamp)
-	kRegion := hmacSHA256(kDate, region)
-	kService := hmacSHA256(kRegion, "s3")
-	kSigning := hmacSHA256(kService, "aws4_request")
-
-	signature := hex.EncodeToString(hmacSHA256(kSigning, stringToSign))
-
-	return fmt.Sprintf("%s%s?%s&X-Amz-Signature=%s", endpointURL, canonicalURI, queryParams, signature), nil
+func contentTypeForFile(path string) string {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".mp3":
+		return "audio/mpeg"
+	case ".flac":
+		return "audio/flac"
+	case ".ogg", ".opus":
+		return "audio/ogg"
+	case ".m4a", ".aac":
+		return "audio/mp4"
+	case ".wav":
+		return "audio/wav"
+	default:
+		return "application/octet-stream"
+	}
 }
 
-func sha256Hex(data []byte) string {
-	h := sha256.Sum256(data)
-	return hex.EncodeToString(h[:])
-}
+func downloadImage(rawURL string) ([]byte, string, error) {
+	target, err := validateProxyTarget(rawURL)
+	if err != nil {
+		return nil, "", err
+	}
 
-func hmacSHA256(key []byte, data string) []byte {
-	h := hmac.New(sha256.New, key)
-	h.Write([]byte(data))
-	return h.Sum(nil)
-}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 
-func downloadImage(url string) ([]byte, string, error) {
-	resp, err := http.Get(url)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target.String(), nil)
+	if err != nil {
+		return nil, "", err
+	}
+
+	resp, err := getImageHTTPClient().Do(req)
 	if err != nil {
 		return nil, "", err
 	}
@@ -319,7 +322,7 @@ func downloadImage(url string) ([]byte, string, error) {
 		return nil, "", fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 
-	data, err := io.ReadAll(resp.Body)
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 	if err != nil {
 		return nil, "", err
 	}

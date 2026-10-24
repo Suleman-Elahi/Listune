@@ -1,6 +1,12 @@
 import { parseBuffer } from 'music-metadata';
 import { openDB, type IDBPDatabase } from 'idb';
 import type { S3Config, LocalSource, Track, MusicPlayerDB } from 'src/types/models';
+import {
+  buildPresignedUrl,
+  proxyUrlFor,
+  s3SourceId,
+  stableTrackId,
+} from '../services/sigv4';
 
 // ── DB helpers (inline, no import from main thread service) ──────────────────
 
@@ -38,181 +44,61 @@ async function putArtwork(trackId: string, blob: Blob): Promise<void> {
   await database.put('artwork', blob, trackId);
 }
 
-// ── SigV4 helpers (duplicated from s3Client for worker context) ──────────────
-
-async function hmacSha256(key: ArrayBuffer, data: string): Promise<ArrayBuffer> {
-  const cryptoKey = await crypto.subtle.importKey(
-    'raw',
-    key,
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign'],
-  );
-  return crypto.subtle.sign('HMAC', cryptoKey, new TextEncoder().encode(data));
-}
-
-async function sha256Hex(data: string): Promise<string> {
-  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(data));
-  return Array.from(new Uint8Array(buf))
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
-}
-
-function toHex(buf: ArrayBuffer): string {
-  return Array.from(new Uint8Array(buf))
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
-}
-
-function formatDate(d: Date): string {
-  return d.toISOString().slice(0, 10).replace(/-/g, '');
-}
-
-function formatDateTime(d: Date): string {
-  return d.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
-}
-
-async function getPresignedUrl(cfg: S3Config, key: string, expiresIn = 3600): Promise<string> {
-  const now = new Date();
-  const dateStamp = formatDate(now);
-  const amzDate = formatDateTime(now);
-  const credentialScope = `${dateStamp}/${cfg.region}/s3/aws4_request`;
-  const credential = `${cfg.accessKey}/${credentialScope}`;
-
-  const queryParams: Record<string, string> = {
-    'X-Amz-Algorithm': 'AWS4-HMAC-SHA256',
-    'X-Amz-Credential': credential,
-    'X-Amz-Date': amzDate,
-    'X-Amz-Expires': String(expiresIn),
-    'X-Amz-SignedHeaders': 'host',
-  };
-
-  const sortedKeys = Object.keys(queryParams).sort();
-  const canonicalQueryString = sortedKeys
-    .map((k) => `${encodeURIComponent(k)}=${encodeURIComponent(queryParams[k]!)}`)
-    .join('&');
-
-  const endpointUrl = new URL(cfg.endpoint);
-  const host = endpointUrl.host;
-  const canonicalUri = `/${cfg.bucket}/${key}`;
-  const canonicalHeaders = `host:${host}\n`;
-  const signedHeaders = 'host';
-  const payloadHash = 'UNSIGNED-PAYLOAD';
-
-  const canonicalRequest = [
-    'GET',
-    canonicalUri,
-    canonicalQueryString,
-    canonicalHeaders,
-    signedHeaders,
-    payloadHash,
-  ].join('\n');
-
-  const canonicalRequestHash = await sha256Hex(canonicalRequest);
-  const stringToSign = [
-    'AWS4-HMAC-SHA256',
-    amzDate,
-    credentialScope,
-    canonicalRequestHash,
-  ].join('\n');
-
-  const kSecret = new TextEncoder().encode(`AWS4${cfg.secretKey}`).buffer as ArrayBuffer;
-  const kDate = await hmacSha256(kSecret, dateStamp);
-  const kRegion = await hmacSha256(kDate, cfg.region);
-  const kService = await hmacSha256(kRegion, 's3');
-  const kSigning = await hmacSha256(kService, 'aws4_request');
-
-  const signatureBuf = await hmacSha256(kSigning, stringToSign);
-  const signature = toHex(signatureBuf);
-
-  return `${cfg.endpoint}/${cfg.bucket}/${key}?${canonicalQueryString}&X-Amz-Signature=${signature}`;
-}
-
 // ── S3 ListObjectsV2 ─────────────────────────────────────────────────────────
 
 const AUDIO_EXTENSIONS = new Set(['.mp3', '.flac', '.ogg', '.m4a', '.wav', '.aac']);
+
+function decodeXmlEntities(value: string): string {
+  return value
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, '&');
+}
+
+function decodeListValue(value: string): string {
+  const entityDecoded = decodeXmlEntities(value);
+  try {
+    return decodeURIComponent(entityDecoded);
+  } catch {
+    return entityDecoded;
+  }
+}
 
 async function listS3Objects(cfg: S3Config): Promise<string[]> {
   const keys: string[] = [];
   let continuationToken: string | null = null;
 
   do {
-    const now = new Date();
-    const dateStamp = formatDate(now);
-    const amzDate = formatDateTime(now);
-    const credentialScope = `${dateStamp}/${cfg.region}/s3/aws4_request`;
-    const credential = `${cfg.accessKey}/${credentialScope}`;
-
-    const queryParams: Record<string, string> = {
+    const query: Record<string, string> = {
       'list-type': '2',
-      'X-Amz-Algorithm': 'AWS4-HMAC-SHA256',
-      'X-Amz-Credential': credential,
-      'X-Amz-Date': amzDate,
-      'X-Amz-Expires': '60',
-      'X-Amz-SignedHeaders': 'host',
+      // Ask S3 to percent-encode keys/tokens so XML entities can't corrupt them.
+      'encoding-type': 'url',
     };
     if (continuationToken) {
-      queryParams['continuation-token'] = continuationToken;
+      query['continuation-token'] = continuationToken;
     }
 
-    const sortedKeys = Object.keys(queryParams).sort();
-    const canonicalQueryString = sortedKeys
-      .map((k) => `${encodeURIComponent(k)}=${encodeURIComponent(queryParams[k]!)}`)
-      .join('&');
-
-    const endpointUrl = new URL(cfg.endpoint);
-    const host = endpointUrl.host;
-    const canonicalUri = `/${cfg.bucket}`;
-    const canonicalHeaders = `host:${host}\n`;
-    const signedHeaders = 'host';
-    const payloadHash = await sha256Hex('');
-
-    const canonicalRequest = [
-      'GET',
-      canonicalUri,
-      canonicalQueryString,
-      canonicalHeaders,
-      signedHeaders,
-      payloadHash,
-    ].join('\n');
-
-    const canonicalRequestHash = await sha256Hex(canonicalRequest);
-    const stringToSign = [
-      'AWS4-HMAC-SHA256',
-      amzDate,
-      credentialScope,
-      canonicalRequestHash,
-    ].join('\n');
-
-    const kSecret = new TextEncoder().encode(`AWS4${cfg.secretKey}`).buffer as ArrayBuffer;
-    const kDate = await hmacSha256(kSecret, dateStamp);
-    const kRegion = await hmacSha256(kDate, cfg.region);
-    const kService = await hmacSha256(kRegion, 's3');
-    const kSigning = await hmacSha256(kService, 'aws4_request');
-    const signatureBuf = await hmacSha256(kSigning, stringToSign);
-    const signature = toHex(signatureBuf);
-
-    const url = `${cfg.endpoint}/${cfg.bucket}?${canonicalQueryString}&X-Amz-Signature=${signature}`;
-    const response = await fetch(url);
+    const url = await buildPresignedUrl(cfg, '', { expiresIn: 60, query });
+    const response = await fetch(proxyUrlFor(url));
     if (!response.ok) {
       throw new Error(`ListObjectsV2 failed: ${response.status} ${response.statusText}`);
     }
 
     const xml = await response.text();
 
-    // Parse <Key> elements from XML
-    const keyMatches = xml.matchAll(/<Key>([^<]+)<\/Key>/g);
-    for (const match of keyMatches) {
-      const key = match[1]!;
+    for (const match of xml.matchAll(/<Key>([\s\S]*?)<\/Key>/g)) {
+      const key = decodeListValue(match[1]!);
       const ext = key.slice(key.lastIndexOf('.')).toLowerCase();
       if (AUDIO_EXTENSIONS.has(ext)) {
         keys.push(key);
       }
     }
 
-    // Check for continuation token
-    const tokenMatch = xml.match(/<NextContinuationToken>([^<]+)<\/NextContinuationToken>/);
-    continuationToken = tokenMatch ? tokenMatch[1]! : null;
+    const isTruncated = /<IsTruncated>\s*true\s*<\/IsTruncated>/i.test(xml);
+    const tokenMatch = xml.match(/<NextContinuationToken>([\s\S]*?)<\/NextContinuationToken>/);
+    continuationToken = isTruncated && tokenMatch ? decodeListValue(tokenMatch[1]!) : null;
   } while (continuationToken);
 
   return keys;
@@ -226,6 +112,7 @@ async function collectLocalFiles(
 ): Promise<{ handle: FileSystemFileHandle; path: string }[]> {
   const results: { handle: FileSystemFileHandle; path: string }[] = [];
   // @ts-expect-error FileSystemDirectoryHandle is async iterable in modern browsers
+  // eslint-disable-next-line @typescript-eslint/await-thenable
   for await (const [name, entry] of dir) {
     const entryPath = path ? `${path}/${name}` : name;
     if (entry.kind === 'file') {
@@ -249,6 +136,14 @@ function filenameWithoutExtension(filename: string): string {
   return dotIdx > 0 ? base.slice(0, dotIdx) : base;
 }
 
+function totalSizeFromResponse(response: Response): number | undefined {
+  const contentRange = response.headers.get('Content-Range');
+  const rangeMatch = contentRange?.match(/\/(\d+)$/);
+  if (rangeMatch) return Number(rangeMatch[1]);
+  const contentLength = response.headers.get('Content-Length');
+  return contentLength ? Number(contentLength) : undefined;
+}
+
 // ── Main scan logic ──────────────────────────────────────────────────────────
 
 const BATCH_SIZE = 20;
@@ -256,7 +151,7 @@ const RANGE_BYTES = 131072; // 128 KB
 
 let cancelled = false;
 
-async function scanS3(cfg: S3Config): Promise<void> {
+async function scanS3(cfg: S3Config, sourceName: string): Promise<void> {
   let keys: string[];
   try {
     keys = await listS3Objects(cfg);
@@ -278,18 +173,20 @@ async function scanS3(cfg: S3Config): Promise<void> {
     for (const key of batch) {
       if (cancelled) break;
 
-      const id = crypto.randomUUID();
+      const id = await stableTrackId(sourceName, 's3', key);
       let buffer: ArrayBuffer;
+      let totalSize: number | undefined;
 
       try {
-        const url = await getPresignedUrl(cfg, key);
-        const response = await fetch(url, {
+        const url = await buildPresignedUrl(cfg, key, { expiresIn: 300 });
+        const response = await fetch(proxyUrlFor(url), {
           headers: { Range: `bytes=0-${RANGE_BYTES - 1}` },
         });
-        if (!response.ok) {
+        if (!response.ok && response.status !== 206) {
           errors++;
           continue;
         }
+        totalSize = totalSizeFromResponse(response);
         buffer = await response.arrayBuffer();
       } catch {
         errors++;
@@ -298,17 +195,26 @@ async function scanS3(cfg: S3Config): Promise<void> {
 
       let track: Track;
       try {
-        const metadata = await parseBuffer(new Uint8Array(buffer), undefined, {
-          duration: true,
-          skipCovers: false,
-        });
+        const metadata = await parseBuffer(
+          new Uint8Array(buffer),
+          totalSize ? { size: totalSize } : undefined,
+          { duration: true, skipCovers: false },
+        );
         const { title, artist, album } = metadata.common;
         const duration = metadata.format.duration ?? 0;
         const cover = metadata.common.picture?.[0];
 
         let artworkId: string | null = null;
         if (cover) {
-          const blob = new Blob([cover.data.buffer.slice(cover.data.byteOffset, cover.data.byteOffset + cover.data.byteLength) as ArrayBuffer], { type: cover.format });
+          const blob = new Blob(
+            [
+              cover.data.buffer.slice(
+                cover.data.byteOffset,
+                cover.data.byteOffset + cover.data.byteLength,
+              ) as ArrayBuffer,
+            ],
+            { type: cover.format },
+          );
           await putArtwork(id, blob);
           artworkId = id;
         }
@@ -320,6 +226,7 @@ async function scanS3(cfg: S3Config): Promise<void> {
           album: album || '',
           duration,
           sourceTag: 's3',
+          sourceName,
           artworkId,
           s3Key: key,
         };
@@ -331,6 +238,7 @@ async function scanS3(cfg: S3Config): Promise<void> {
           album: '',
           duration: 0,
           sourceTag: 's3',
+          sourceName,
           artworkId: null,
           s3Key: key,
         };
@@ -353,7 +261,7 @@ async function scanS3(cfg: S3Config): Promise<void> {
   }
 }
 
-async function scanLocal(source: LocalSource): Promise<void> {
+async function scanLocal(source: LocalSource, sourceName: string): Promise<void> {
   let files: { handle: FileSystemFileHandle; path: string }[];
   try {
     files = await collectLocalFiles(source.handle);
@@ -375,11 +283,13 @@ async function scanLocal(source: LocalSource): Promise<void> {
     for (const { handle, path } of batch) {
       if (cancelled) break;
 
-      const id = crypto.randomUUID();
+      const id = await stableTrackId(sourceName, 'local', path);
       let buffer: ArrayBuffer;
+      let fileSize: number;
 
       try {
         const file = await handle.getFile();
+        fileSize = file.size;
         const slice = file.slice(0, RANGE_BYTES);
         buffer = await slice.arrayBuffer();
       } catch {
@@ -389,17 +299,26 @@ async function scanLocal(source: LocalSource): Promise<void> {
 
       let track: Track;
       try {
-        const metadata = await parseBuffer(new Uint8Array(buffer), undefined, {
-          duration: true,
-          skipCovers: false,
-        });
+        const metadata = await parseBuffer(
+          new Uint8Array(buffer),
+          fileSize ? { size: fileSize } : undefined,
+          { duration: true, skipCovers: false },
+        );
         const { title, artist, album } = metadata.common;
         const duration = metadata.format.duration ?? 0;
         const cover = metadata.common.picture?.[0];
 
         let artworkId: string | null = null;
         if (cover) {
-          const blob = new Blob([cover.data.buffer.slice(cover.data.byteOffset, cover.data.byteOffset + cover.data.byteLength) as ArrayBuffer], { type: cover.format });
+          const blob = new Blob(
+            [
+              cover.data.buffer.slice(
+                cover.data.byteOffset,
+                cover.data.byteOffset + cover.data.byteLength,
+              ) as ArrayBuffer,
+            ],
+            { type: cover.format },
+          );
           await putArtwork(id, blob);
           artworkId = id;
         }
@@ -411,6 +330,7 @@ async function scanLocal(source: LocalSource): Promise<void> {
           album: album || '',
           duration,
           sourceTag: 'local',
+          sourceName,
           artworkId,
           localPath: path,
         };
@@ -422,6 +342,7 @@ async function scanLocal(source: LocalSource): Promise<void> {
           album: '',
           duration: 0,
           sourceTag: 'local',
+          sourceName,
           artworkId: null,
           localPath: path,
         };
@@ -447,7 +368,11 @@ async function scanLocal(source: LocalSource): Promise<void> {
 // ── Message handler ──────────────────────────────────────────────────────────
 
 self.addEventListener('message', (event: MessageEvent) => {
-  const msg = event.data as { type: string; source?: S3Config | LocalSource };
+  const msg = event.data as {
+    type: string;
+    source?: S3Config | LocalSource;
+    sourceName?: string;
+  };
 
   if (msg.type === 'cancel') {
     cancelled = true;
@@ -458,11 +383,14 @@ self.addEventListener('message', (event: MessageEvent) => {
     const source = msg.source!;
     // Distinguish S3Config from LocalSource by presence of 'handle'
     if ('handle' in source) {
-      scanLocal(source as LocalSource).catch((err) => {
+      const sourceName = msg.sourceName ?? source.handle.name;
+      scanLocal(source, sourceName).catch((err) => {
         self.postMessage({ type: 'error', message: String(err) });
       });
     } else {
-      scanS3(source as S3Config).catch((err) => {
+      const cfg = source;
+      const sourceName = msg.sourceName ?? s3SourceId(cfg);
+      scanS3(cfg, sourceName).catch((err) => {
         self.postMessage({ type: 'error', message: String(err) });
       });
     }

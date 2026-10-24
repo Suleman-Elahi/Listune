@@ -8,6 +8,8 @@ export interface Track {
   duration: number;
   sourceTag: 's3' | 'local' | 'server';
   artworkId: string | null;
+  /** Name of the saved source this track came from (needed for multi-bucket S3). */
+  sourceName?: string;
   s3Key?: string;
   localPath?: string;
   serverPath?: string;
@@ -19,6 +21,8 @@ export interface S3Config {
   region: string;
   accessKey: string;
   secretKey: string;
+  /** Optional STS/session token for temporary credentials. */
+  sessionToken?: string;
 }
 
 export interface LocalSource {
@@ -38,7 +42,7 @@ export interface ScanProgress {
 }
 
 export type WorkerInMessage =
-  | { type: 'scan'; source: S3Config | LocalSource }
+  | { type: 'scan'; source: S3Config | LocalSource; sourceName?: string }
   | { type: 'cancel' };
 
 export type WorkerOutMessage =

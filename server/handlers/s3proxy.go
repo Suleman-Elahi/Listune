@@ -2,12 +2,17 @@ package handlers
 
 import (
 	"io"
+	"log"
 	"net/http"
 )
 
 // S3Proxy forwards a request to an S3 presigned URL, adding CORS headers.
 // This avoids CORS issues when the S3 server doesn't properly handle browser preflight.
 // Usage: GET /api/s3proxy?url=<presigned-url>
+//
+// The target is validated and fetched through an SSRF-safe client. By default
+// only public hosts are reachable; add local/private S3 servers (MinIO) to
+// S3_ALLOWED_HOSTS. Link-local and cloud metadata addresses are always blocked.
 func S3Proxy(w http.ResponseWriter, r *http.Request) {
 	targetURL := r.URL.Query().Get("url")
 	if targetURL == "" {
@@ -15,39 +20,55 @@ func S3Proxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Create upstream request
-	req, err := http.NewRequestWithContext(r.Context(), "GET", targetURL, nil)
+	target, err := validateProxyTarget(targetURL)
 	if err != nil {
 		http.Error(w, `{"error":"invalid url"}`, http.StatusBadRequest)
 		return
 	}
 
-	// Forward Range header if present (for partial reads)
-	if rangeHeader := r.Header.Get("Range"); rangeHeader != "" {
-		req.Header.Set("Range", rangeHeader)
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, target.String(), nil)
+	if err != nil {
+		http.Error(w, `{"error":"invalid url"}`, http.StatusBadRequest)
+		return
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	// Forward byte-range headers (seeking, partial metadata reads).
+	if value := r.Header.Get("Range"); value != "" {
+		req.Header.Set("Range", value)
+	}
+	if value := r.Header.Get("If-Range"); value != "" {
+		req.Header.Set("If-Range", value)
+	}
+
+	resp, err := getS3HTTPClient().Do(req)
 	if err != nil {
 		http.Error(w, `{"error":"upstream request failed"}`, http.StatusBadGateway)
 		return
 	}
 	defer resp.Body.Close()
 
-	// Copy relevant response headers
-	if ct := resp.Header.Get("Content-Type"); ct != "" {
-		w.Header().Set("Content-Type", ct)
+	// Never proxy redirects: that would let an allowed host bounce us elsewhere.
+	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		http.Error(w, `{"error":"upstream redirect refused"}`, http.StatusBadGateway)
+		return
 	}
-	if cl := resp.Header.Get("Content-Length"); cl != "" {
-		w.Header().Set("Content-Length", cl)
-	}
-	if cr := resp.Header.Get("Content-Range"); cr != "" {
-		w.Header().Set("Content-Range", cr)
-	}
-	if ar := resp.Header.Get("Accept-Ranges"); ar != "" {
-		w.Header().Set("Accept-Ranges", ar)
+
+	for _, header := range []string{
+		"Content-Type",
+		"Content-Length",
+		"Content-Range",
+		"Accept-Ranges",
+		"ETag",
+		"Last-Modified",
+		"Cache-Control",
+	} {
+		if value := resp.Header.Get(header); value != "" {
+			w.Header().Set(header, value)
+		}
 	}
 
 	w.WriteHeader(resp.StatusCode)
-	io.Copy(w, resp.Body)
+	if _, err := io.Copy(w, resp.Body); err != nil {
+		log.Printf("s3proxy: copy response: %v", err)
+	}
 }

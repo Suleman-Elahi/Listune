@@ -5,8 +5,9 @@ import { defineStore } from 'pinia';
 import { markRaw, watch } from 'vue';
 import { audioEngine } from 'src/services/audioEngine';
 import { db } from 'src/services/db';
-import { s3Client } from 'src/services/s3Client';
+import { buildPresignedUrl, proxyUrlFor } from 'src/services/sigv4';
 import { backend } from 'src/services/backend';
+import type { S3Config } from 'src/types/models';
 
 // Resolve a local track path to a blob URL using stored FileSystemDirectoryHandle
 async function resolveLocalUrl(localPath: string): Promise<string | null> {
@@ -30,6 +31,18 @@ async function resolveLocalUrl(localPath: string): Promise<string | null> {
     }
   }
   return null;
+}
+
+// Resolve the saved S3 credentials for a track. Tracks store their source name
+// so multiple buckets/endpoints can coexist; fall back to the first S3 source
+// for libraries scanned before source names were recorded.
+async function resolveS3Config(sourceName?: string): Promise<S3Config | null> {
+  const sources = await db.getSources();
+  const s3Sources = sources.filter((s) => s.type === 's3');
+  const source =
+    (sourceName ? s3Sources.find((s) => s.name === sourceName) : undefined) ??
+    (s3Sources.length === 1 ? s3Sources[0] : undefined);
+  return source ? (source.config as S3Config) : null;
 }
 // Req 3.8: Wrap non-serializable audio objects with markRaw();
 // stored as a module-level variable, outside the Pinia state tree
@@ -75,9 +88,10 @@ export const usePlayerStore = defineStore('player', {
       if (!track) return null;
 
       if (track.sourceTag === 's3' && track.s3Key) {
-        await this._ensureS3Configured();
-        const presigned = await s3Client.getPresignedUrl(track.s3Key);
-        return `${backend.baseUrl}/api/s3proxy?url=${encodeURIComponent(presigned)}`;
+        const cfg = await resolveS3Config(track.sourceName);
+        if (!cfg) return null;
+        const presigned = await buildPresignedUrl(cfg, track.s3Key);
+        return proxyUrlFor(presigned);
       } else if (track.sourceTag === 'server' && track.serverPath) {
         return backend.streamUrl(track.serverPath);
       } else if (track.sourceTag === 'local' && track.localPath) {
@@ -109,7 +123,13 @@ export const usePlayerStore = defineStore('player', {
     },
 
     async play(trackId: string): Promise<void> {
-      const url = await this._resolveTrackUrl(trackId);
+      let url: string | null;
+      try {
+        url = await this._resolveTrackUrl(trackId);
+      } catch {
+        // Missing/removed source or signing failure: don't surface as unhandled rejection.
+        return;
+      }
       if (!url) return;
 
       // Ensure AudioContext is initialized (autoplay policy requires user gesture)
@@ -123,7 +143,7 @@ export const usePlayerStore = defineStore('player', {
       _startInterval(this);
 
       // Preload next track for gapless playback
-      this._preloadNext();
+      this._preloadNext().catch(() => undefined);
     },
 
     pause(): void {
@@ -135,7 +155,7 @@ export const usePlayerStore = defineStore('player', {
     resume(): void {
       // If audio source isn't loaded (e.g. after app restart), re-play the current track
       if (this.currentTrackId && !_engine.currentAudio.src) {
-        this.play(this.currentTrackId);
+        this.play(this.currentTrackId).catch(() => undefined);
         return;
       }
       _engine.resume();
@@ -182,7 +202,7 @@ export const usePlayerStore = defineStore('player', {
         this.isPlaying = true;
         _startInterval(this);
         // Preload the track after next
-        this._preloadNext();
+        this._preloadNext().catch(() => undefined);
       } else {
         // Fallback: normal play (URL not preloaded or preload failed)
         await this.play(nextId);
@@ -229,17 +249,6 @@ export const usePlayerStore = defineStore('player', {
         isLooping: this.isLooping,
         volume: this.volume,
       });
-    },
-
-    /** Ensure s3Client is configured from saved IndexedDB sources */
-    async _ensureS3Configured(): Promise<void> {
-      if (s3Client.isConfigured()) return;
-      const sources = await db.getSources();
-      const s3Source = sources.find((s) => s.type === 's3');
-      if (s3Source) {
-        const cfg = s3Source.config as import('src/types/models').S3Config;
-        s3Client.configure(cfg);
-      }
     },
 
     /** Restore queue from backend on app load */

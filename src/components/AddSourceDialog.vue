@@ -7,6 +7,52 @@
         <q-btn icon="close" flat round dense @click="open = false" />
       </q-card-section>
 
+      <q-card-section v-if="savedSources.length" class="q-py-none">
+        <div class="text-caption text-grey-5 q-mb-xs">Saved sources</div>
+        <q-list dense dark separator>
+          <q-item v-for="source in savedSources" :key="source.name" class="q-px-none">
+            <q-item-section avatar>
+              <q-icon :name="source.type === 's3' ? 'cloud' : 'folder'" size="18px" />
+            </q-item-section>
+            <q-item-section>
+              <q-item-label style="word-break: break-all">{{ source.name }}</q-item-label>
+              <q-item-label caption>
+                {{ source.type === 's3' ? 'S3 bucket' : 'Local folder' }}
+              </q-item-label>
+            </q-item-section>
+            <q-item-section side>
+              <div class="row items-center">
+                <q-btn
+                  v-if="source.type === 's3'"
+                  flat
+                  round
+                  dense
+                  size="sm"
+                  icon="edit"
+                  @click="useSource(source)"
+                >
+                  <q-tooltip>Load into form</q-tooltip>
+                </q-btn>
+                <q-btn flat round dense size="sm" icon="refresh" @click="rescanSource(source)">
+                  <q-tooltip>Rescan</q-tooltip>
+                </q-btn>
+                <q-btn
+                  flat
+                  round
+                  dense
+                  size="sm"
+                  icon="delete"
+                  color="negative"
+                  @click="removeSource(source)"
+                >
+                  <q-tooltip>Remove source and its tracks</q-tooltip>
+                </q-btn>
+              </div>
+            </q-item-section>
+          </q-item>
+        </q-list>
+      </q-card-section>
+
       <q-card-section>
         <q-tabs v-model="sourceType" dense align="justify" active-color="white" indicator-color="white">
           <q-tab name="server" label="Server Folder" icon="dns" />
@@ -63,7 +109,7 @@
               outlined
               dense
               label="Endpoint URL"
-              placeholder="https://s3.amazonaws.com"
+              placeholder="https://s3.us-east-1.amazonaws.com"
               class="q-mb-sm"
             />
             <q-input v-model="s3Form.bucket" dark outlined dense label="Bucket" class="q-mb-sm" />
@@ -86,6 +132,14 @@
                 />
               </template>
             </q-input>
+            <q-input
+              v-model="s3Form.sessionToken"
+              dark
+              outlined
+              dense
+              label="Session Token (optional)"
+              class="q-mb-sm"
+            />
           </q-tab-panel>
         </q-tab-panels>
       </q-card-section>
@@ -106,15 +160,19 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue';
+import { ref, computed, watch } from 'vue';
+import { useQuasar } from 'quasar';
 import { useLibraryStore } from 'src/stores/libraryStore';
 import { db } from 'src/services/db';
 import { backend } from 'src/services/backend';
-import type { S3Config, LocalSource, Track } from 'src/types/models';
+import { s3SourceId } from 'src/services/sigv4';
+import type { S3Config, LocalSource, SourceRecord, Track } from 'src/types/models';
 
 const open = defineModel<boolean>({ default: false });
 
+const $q = useQuasar();
 const libraryStore = useLibraryStore();
+const savedSources = ref<SourceRecord[]>([]);
 const sourceType = ref<'server' | 'local' | 's3'>('server');
 const showSecret = ref(false);
 
@@ -143,7 +201,52 @@ const s3Form = ref<S3Config>({
   region: '',
   accessKey: '',
   secretKey: '',
+  sessionToken: '',
 });
+
+async function loadSources(): Promise<void> {
+  savedSources.value = await db.getSources();
+}
+
+watch(
+  open,
+  (isOpen) => {
+    if (isOpen) loadSources().catch(() => undefined);
+  },
+  { immediate: true },
+);
+
+function useSource(source: SourceRecord): void {
+  if (source.type !== 's3' || 'handle' in source.config) return;
+  const cfg = source.config;
+  s3Form.value = { ...cfg, sessionToken: cfg.sessionToken ?? '' };
+  sourceType.value = 's3';
+}
+
+function rescanSource(source: SourceRecord): void {
+  if (source.type === 's3' && !('handle' in source.config)) {
+    libraryStore.startScan(source.config, source.name);
+  } else if ('handle' in source.config) {
+    libraryStore.startScan({ handle: source.config.handle }, source.name);
+  }
+  open.value = false;
+}
+
+function removeSource(source: SourceRecord): void {
+  $q.dialog({
+    title: 'Remove source',
+    message: `Remove "${source.name}" and all tracks scanned from it?`,
+    cancel: true,
+    persistent: true,
+    dark: true,
+  }).onOk(() => {
+    void (async () => {
+      await db.deleteSource(source.name);
+      await loadSources();
+      await libraryStore.search(libraryStore.searchQuery);
+    })();
+  });
+}
 
 const canScan = computed(() => {
   if (sourceType.value === 'server') return serverFolder.value.trim().length > 0;
@@ -157,22 +260,26 @@ async function startScan() {
     await scanServerFolder();
   } else if (sourceType.value === 'local' && localHandle.value) {
     const source: LocalSource = { handle: localHandle.value };
-    void db.putSource(localHandle.value.name, {
-      name: localHandle.value.name,
+    const sourceName = localHandle.value.name;
+    await db.putSource(sourceName, {
+      name: sourceName,
       type: 'local',
       config: { handle: localHandle.value },
     });
-    libraryStore.startScan(source);
+    await loadSources();
+    libraryStore.startScan(source, sourceName);
     open.value = false;
   } else if (sourceType.value === 's3') {
     const cfg = { ...s3Form.value };
+    const sourceName = s3SourceId(cfg);
     // Save S3 source config to IndexedDB so playback can use it later
-    void db.putSource(cfg.bucket, {
-      name: cfg.bucket,
+    await db.putSource(sourceName, {
+      name: sourceName,
       type: 's3' as const,
       config: cfg,
     });
-    libraryStore.startScan(cfg);
+    await loadSources();
+    libraryStore.startScan(cfg, sourceName);
     open.value = false;
   }
 }
@@ -210,7 +317,7 @@ async function scanServerFolder() {
 
     serverScanning.value = false;
     open.value = false;
-  } catch (err) {
+  } catch {
     serverScanError.value = 'Failed to connect to backend';
     serverScanning.value = false;
   }

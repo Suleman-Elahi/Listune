@@ -6,11 +6,12 @@ export interface Track {
   artist: string;
   album: string;
   duration: number;
-  sourceTag: 's3' | 'local' | 'server';
+  sourceTag: 's3' | 'local' | 'server' | 'gdrive';
   artworkId: string | null;
   /** Name of the saved source this track came from (needed for multi-bucket S3). */
   sourceName?: string;
   s3Key?: string;
+  gdriveFileId?: string;
   localPath?: string;
   serverPath?: string;
 }
@@ -31,8 +32,8 @@ export interface LocalSource {
 
 export interface SourceRecord {
   name: string;
-  type: 's3' | 'local';
-  config: S3Config | { handle: FileSystemDirectoryHandle };
+  type: 's3' | 'local' | 'gdrive';
+  config: S3Config | { handle: FileSystemDirectoryHandle } | { folderId: string; folderName?: string };
 }
 
 export interface ScanProgress {
@@ -42,7 +43,7 @@ export interface ScanProgress {
 }
 
 export type WorkerInMessage =
-  | { type: 'scan'; source: S3Config | LocalSource; sourceName?: string }
+  | { type: 'scan'; source: S3Config | LocalSource | { folderId: string; folderName?: string; token: string }; sourceName?: string }
   | { type: 'cancel' };
 
 export type WorkerOutMessage =

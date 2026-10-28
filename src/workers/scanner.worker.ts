@@ -46,6 +46,8 @@ async function putArtwork(trackId: string, blob: Blob): Promise<void> {
 
 // ── S3 ListObjectsV2 ─────────────────────────────────────────────────────────
 
+const BASE_URL = (import.meta as { env?: { VITE_BACKEND_URL?: string } }).env?.VITE_BACKEND_URL || "http://localhost:8090";
+
 const AUDIO_EXTENSIONS = new Set([
   '.mp3',
   '.flac',
@@ -384,12 +386,104 @@ async function scanLocal(source: LocalSource, sourceName: string): Promise<void>
   }
 }
 
+
+async function scanGDrive(source: { folderId: string; folderName?: string; token: string }, sourceName: string): Promise<void> {
+  let files: { id: string; name: string; mimeType: string; size?: string }[];
+  try {
+    const res = await fetch(`${BASE_URL}/api/gdrive/files?folderId=${encodeURIComponent(source.folderId)}&token=${encodeURIComponent(source.token)}`);
+    if (!res.ok) throw new Error(`list failed: ${res.status}`);
+    files = await res.json();
+  } catch (err) {
+    self.postMessage({ type: 'error', message: String(err) });
+    return;
+  }
+
+  const total = files.length;
+  let scanned = 0;
+  let errors = 0;
+
+  for (let i = 0; i < files.length; i += BATCH_SIZE) {
+    if (cancelled) break;
+    const batch = files.slice(i, i + BATCH_SIZE);
+    const tracks: Track[] = [];
+    for (const f of batch) {
+      if (cancelled) break;
+      const id = await stableTrackId(sourceName, 'gdrive', f.id);
+      let buffer: ArrayBuffer;
+      let totalSize: number | undefined;
+      try {
+        const res = await fetch(`${BASE_URL}/api/gdrive/stream?fileId=${encodeURIComponent(f.id)}&token=${encodeURIComponent(source.token)}`, {
+          headers: { Range: `bytes=0-${RANGE_BYTES - 1}` },
+        });
+        if (!res.ok && res.status !== 206) {
+          errors++;
+          continue;
+        }
+        totalSize = totalSizeFromResponse(res);
+        buffer = await res.arrayBuffer();
+      } catch {
+        errors++;
+        continue;
+      }
+
+      let track: Track;
+      try {
+        const metadata = await parseBuffer(
+          new Uint8Array(buffer),
+          totalSize ? { size: totalSize } : (f.size ? { size: Number(f.size) } : undefined),
+          { duration: true, skipCovers: false },
+        );
+        const { title, artist, album } = metadata.common;
+        const duration = metadata.format.duration ?? 0;
+        const cover = metadata.common.picture?.[0];
+        let artworkId: string | null = null;
+        if (cover) {
+          const blob = new Blob([cover.data.buffer.slice(cover.data.byteOffset, cover.data.byteOffset + cover.data.byteLength) as ArrayBuffer], { type: cover.format });
+          await putArtwork(id, blob);
+          artworkId = id;
+        }
+        track = {
+          id,
+          title: title || filenameWithoutExtension(f.name),
+          artist: artist || '',
+          album: album || '',
+          duration,
+          sourceTag: 'gdrive',
+          sourceName,
+          artworkId,
+          gdriveFileId: f.id,
+        };
+      } catch {
+        track = {
+          id,
+          title: filenameWithoutExtension(f.name),
+          artist: '',
+          album: '',
+          duration: 0,
+          sourceTag: 'gdrive',
+          sourceName,
+          artworkId: null,
+          gdriveFileId: f.id,
+        };
+      }
+      tracks.push(track);
+      scanned++;
+    }
+    if (tracks.length > 0) await putTracks(tracks);
+    self.postMessage({ type: 'progress', scanned, total, errors });
+  }
+  if (!cancelled) {
+    self.postMessage({ type: 'complete' });
+    self.close();
+  }
+}
+
 // ── Message handler ──────────────────────────────────────────────────────────
 
 self.addEventListener('message', (event: MessageEvent) => {
   const msg = event.data as {
     type: string;
-    source?: S3Config | LocalSource;
+    source?: S3Config | LocalSource | { folderId: string; folderName?: string; token: string };
     sourceName?: string;
   };
 
@@ -404,6 +498,12 @@ self.addEventListener('message', (event: MessageEvent) => {
     if ('handle' in source) {
       const sourceName = msg.sourceName ?? source.handle.name;
       scanLocal(source, sourceName).catch((err) => {
+        self.postMessage({ type: 'error', message: String(err) });
+      });
+    } else if ('folderId' in source) {
+      const cfg = source;
+      const sourceName = msg.sourceName ?? `gdrive-${cfg.folderId}`;
+      scanGDrive(cfg, sourceName).catch((err) => {
         self.postMessage({ type: 'error', message: String(err) });
       });
     } else {

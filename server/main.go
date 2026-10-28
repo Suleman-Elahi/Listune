@@ -48,6 +48,11 @@ func main() {
 	// S3 proxy (avoids CORS issues with local S3 servers)
 	mux.HandleFunc("GET /api/s3proxy", handlers.S3Proxy)
 
+	// Google Drive
+	mux.HandleFunc("GET /api/gdrive/folders", handlers.GDriveFoldersHandler)
+	mux.HandleFunc("GET /api/gdrive/files", handlers.GDriveFilesHandler)
+	mux.HandleFunc("GET /api/gdrive/stream", handlers.GDriveStreamHandler)
+
 	// Wrap with CORS
 	handler := handlers.CORSMiddleware(mux)
 

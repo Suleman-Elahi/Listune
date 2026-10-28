@@ -139,6 +139,34 @@ export const backend = {
     return this.identifyTrack(blob, filename, hints);
   },
 
+  /** List Google Drive folders under a parent (root if omitted). */
+  async gdriveFolders(parentId: string | undefined, token: string): Promise<{ id: string; name: string; mimeType: string }[]> {
+    const res = await fetch(`${BASE_URL}/api/gdrive/folders?parentId=${encodeURIComponent(parentId || 'root')}&token=${encodeURIComponent(token)}`);
+    if (!res.ok) {
+      let detail = '';
+      try {
+        const body = (await res.json()) as { error?: string };
+        detail = body.error ? `: ${body.error}` : '';
+      } catch {
+        // ignore
+      }
+      throw new Error(`Drive request failed (${res.status})${detail}`);
+    }
+    return res.json();
+  },
+
+  /** Recursively list audio files under a Google Drive folder. */
+  async gdriveFiles(folderId: string, token: string): Promise<{ id: string; name: string; mimeType: string; size?: string }[]> {
+    const res = await fetch(`${BASE_URL}/api/gdrive/files?folderId=${encodeURIComponent(folderId)}&token=${encodeURIComponent(token)}`);
+    if (!res.ok) return [];
+    return res.json();
+  },
+
+  /** Streaming URL for a Google Drive file. */
+  gdriveStreamUrl(fileId: string, token: string): string {
+    return `${BASE_URL}/api/gdrive/stream?fileId=${encodeURIComponent(fileId)}&token=${encodeURIComponent(token)}`;
+  },
+
   /** Check if backend is reachable. */
   async healthCheck(): Promise<boolean> {
     try {

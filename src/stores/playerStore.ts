@@ -34,6 +34,18 @@ async function resolveLocalUrl(localPath: string): Promise<string | null> {
 }
 // Req 3.8: Wrap non-serializable audio objects with markRaw();
 // stored as a module-level variable, outside the Pinia state tree
+
+function getGoogleToken(): string | null {
+  try {
+    const raw = localStorage.getItem('listune_user');
+    if (!raw) return null;
+    const u = JSON.parse(raw) as { token?: string };
+    return u.token ?? null;
+  } catch {
+    return null;
+  }
+}
+
 const _engine = markRaw(audioEngine);
 
 // Interval handle for currentTime/duration polling (module-level, not in state)
@@ -84,6 +96,10 @@ export const usePlayerStore = defineStore('player', {
         return backend.streamUrl(track.serverPath);
       } else if (track.sourceTag === 'local' && track.localPath) {
         return await resolveLocalUrl(track.localPath);
+      } else if (track.sourceTag === 'gdrive' && track.gdriveFileId) {
+        const token = getGoogleToken();
+        if (!token) return null;
+        return backend.gdriveStreamUrl(track.gdriveFileId, token);
       }
       return null;
     },

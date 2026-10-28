@@ -2,8 +2,8 @@
   "name": "player",
   "version": "0.0.1",
   "description": "A media player",
-  "productName": "medmia.player",
-  "author": "ilovefreesw <suleman@inklik.com>",
+  "productName": "Listune",
+  "author": "ilovefreesw <suleman@duck.com>",
   "type": "module",
   "private": true,
   "scripts": {

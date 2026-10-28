@@ -12,12 +12,18 @@
         <q-list dense dark separator>
           <q-item v-for="source in savedSources" :key="source.name" class="q-px-none">
             <q-item-section avatar>
-              <q-icon :name="source.type === 's3' ? 'cloud' : 'folder'" size="18px" />
+              <q-icon :name="source.type === 's3' ? 'cloud' : source.type === 'gdrive' ? 'cloud_queue' : 'folder'" size="18px" />
             </q-item-section>
             <q-item-section>
               <q-item-label style="word-break: break-all">{{ source.name }}</q-item-label>
               <q-item-label caption>
-                {{ source.type === 's3' ? 'S3 bucket' : 'Local folder' }}
+                {{
+                  source.type === 's3'
+                    ? 'S3 bucket'
+                    : source.type === 'gdrive'
+                      ? 'Google Drive folder'
+                      : 'Local folder'
+                }}
               </q-item-label>
             </q-item-section>
             <q-item-section side>
@@ -58,6 +64,7 @@
           <q-tab name="server" label="Server Folder" icon="dns" />
           <q-tab name="local" label="Local Folder" icon="folder" />
           <q-tab name="s3" label="S3 / Cloud" icon="cloud" />
+          <q-tab name="gdrive" label="Google Drive" icon="cloud_queue" />
         </q-tabs>
 
         <q-tab-panels v-model="sourceType" animated style="background: transparent">
@@ -141,6 +148,33 @@
               class="q-mb-sm"
             />
           </q-tab-panel>
+
+          <!-- Google Drive -->
+          <q-tab-panel name="gdrive" class="q-pa-none q-pt-md">
+            <div v-if="!googleToken" class="text-grey-4 text-sm q-mb-sm">
+              Sign in with Google to access Drive.
+              <q-btn flat dense color="primary" label="Sign in" @click="backend.loginGoogle()" />
+            </div>
+            <template v-else>
+              <p class="text-grey-4 text-sm">
+                Pick a folder from your Google Drive. All audio files inside it will be added.
+              </p>
+              <q-btn
+                outline
+                color="white"
+                icon="folder_open"
+                label="Choose Folder"
+                class="full-width"
+                @click="openFolderPicker"
+              />
+              <div v-if="gdriveCurrentName" class="q-mt-sm text-positive">
+                <q-icon name="check_circle" /> {{ gdriveCurrentName }}
+              </div>
+              <div v-if="gdriveError" class="text-negative q-mt-xs" style="font-size: 12px;">
+                {{ gdriveError }}
+              </div>
+            </template>
+          </q-tab-panel>
         </q-tab-panels>
       </q-card-section>
 
@@ -153,6 +187,94 @@
           :disable="!canScan"
           :loading="serverScanning"
           @click="startScan"
+        />
+      </q-card-actions>
+    </q-card>
+  </q-dialog>
+
+  <!-- Google Drive folder picker -->
+  <q-dialog v-model="pickerOpen" maximized>
+    <q-card class="picker-card">
+      <q-card-section class="row items-center q-pb-none">
+        <div class="text-h6">Choose a Drive folder</div>
+        <q-space />
+        <q-btn icon="close" flat round dense @click="pickerOpen = false" />
+      </q-card-section>
+
+      <!-- Breadcrumb -->
+      <q-card-section class="q-py-sm">
+        <div class="row items-center no-wrap q-gutter-xs breadcrumb">
+          <q-btn
+            flat
+            dense
+            size="sm"
+            icon="home"
+            :disable="pickerPath.length === 0"
+            @click="goToRoot"
+          >
+            <q-tooltip>My Drive</q-tooltip>
+          </q-btn>
+          <template v-for="(crumb, i) in pickerPath" :key="crumb.id">
+            <q-icon name="chevron_right" size="16px" color="grey-6" />
+            <q-btn
+              flat
+              dense
+              size="sm"
+              :label="crumb.name"
+              :disable="i === pickerPath.length - 1"
+              @click="goToCrumb(i)"
+            />
+          </template>
+        </div>
+      </q-card-section>
+
+      <q-separator dark />
+
+      <!-- Folder list -->
+      <q-card-section class="q-pt-sm" style="flex: 1; overflow: auto;">
+        <div v-if="pickerLoading" class="column items-center q-pa-lg">
+          <q-spinner size="28px" color="primary" />
+          <div class="text-grey-5 q-mt-sm" style="font-size: 13px;">Loading folders…</div>
+        </div>
+        <div v-else-if="pickerError" class="column items-center q-pa-lg">
+          <q-icon name="error_outline" size="32px" color="negative" />
+          <div class="text-negative q-mt-sm" style="font-size: 13px;">{{ pickerError }}</div>
+          <q-btn flat dense color="primary" label="Retry" class="q-mt-sm" @click="loadPickerFolders" />
+        </div>
+        <div v-else-if="pickerFolders.length === 0" class="column items-center q-pa-lg">
+          <q-icon name="folder_open" size="32px" color="grey-6" />
+          <div class="text-grey-5 q-mt-sm" style="font-size: 13px;">No subfolders here</div>
+        </div>
+        <q-list v-else dense dark separator>
+          <q-item
+            v-for="f in pickerFolders"
+            :key="f.id"
+            clickable
+            v-ripple
+            @click="enterPickerFolder(f.id, f.name)"
+          >
+            <q-item-section avatar>
+              <q-icon name="folder" size="20px" color="amber-4" />
+            </q-item-section>
+            <q-item-section>
+              <q-item-label>{{ f.name }}</q-item-label>
+            </q-item-section>
+            <q-item-section side>
+              <q-icon name="chevron_right" size="18px" color="grey-6" />
+            </q-item-section>
+          </q-item>
+        </q-list>
+      </q-card-section>
+
+      <q-separator dark />
+
+      <q-card-actions align="right">
+        <q-btn flat label="Cancel" color="grey" @click="pickerOpen = false" />
+        <q-btn
+          unelevated
+          :label="`Select ${currentPickerFolderName || 'My Drive'}`"
+          color="primary"
+          @click="confirmPickerFolder"
         />
       </q-card-actions>
     </q-card>
@@ -173,7 +295,7 @@ const open = defineModel<boolean>({ default: false });
 const $q = useQuasar();
 const libraryStore = useLibraryStore();
 const savedSources = ref<SourceRecord[]>([]);
-const sourceType = ref<'server' | 'local' | 's3'>('server');
+const sourceType = ref<'server' | 'local' | 's3' | 'gdrive'>('server');
 const showSecret = ref(false);
 
 // Server folder
@@ -204,6 +326,85 @@ const s3Form = ref<S3Config>({
   sessionToken: '',
 });
 
+
+// Google Drive
+const gdriveFolderId = ref('');
+const gdriveCurrentName = ref('');
+const gdriveError = ref('');
+
+// Folder picker popup state
+const pickerOpen = ref(false);
+const pickerLoading = ref(false);
+const pickerError = ref('');
+const pickerFolders = ref<{ id: string; name: string; mimeType: string }[]>([]);
+/** Navigation stack; empty = My Drive root. */
+const pickerPath = ref<{ id: string; name: string }[]>([]);
+
+const currentPickerFolderId = computed(
+  () => pickerPath.value[pickerPath.value.length - 1]?.id ?? 'root',
+);
+const currentPickerFolderName = computed(
+  () => pickerPath.value[pickerPath.value.length - 1]?.name ?? '',
+);
+
+function getGoogleToken(): string | null {
+  try {
+    const raw = localStorage.getItem('listune_user');
+    if (!raw) return null;
+    const u = JSON.parse(raw) as { token?: string };
+    return u.token ?? null;
+  } catch {
+    return null;
+  }
+}
+// localStorage is not reactive; refresh when the dialog opens.
+const googleToken = ref<string | null>(null);
+
+async function loadPickerFolders(): Promise<void> {
+  const token = getGoogleToken();
+  if (!token) {
+    pickerError.value = 'Not signed in with Google';
+    return;
+  }
+  pickerLoading.value = true;
+  pickerError.value = '';
+  try {
+    pickerFolders.value = await backend.gdriveFolders(currentPickerFolderId.value, token);
+  } catch (err) {
+    pickerError.value = err instanceof Error ? err.message : 'Failed to load folders from Google Drive';
+  } finally {
+    pickerLoading.value = false;
+  }
+}
+
+function openFolderPicker(): void {
+  pickerPath.value = [];
+  pickerOpen.value = true;
+  void loadPickerFolders();
+}
+
+function enterPickerFolder(id: string, name: string): void {
+  pickerPath.value = [...pickerPath.value, { id, name }];
+  void loadPickerFolders();
+}
+
+function goToRoot(): void {
+  pickerPath.value = [];
+  void loadPickerFolders();
+}
+
+function goToCrumb(index: number): void {
+  pickerPath.value = pickerPath.value.slice(0, index + 1);
+  void loadPickerFolders();
+}
+
+function confirmPickerFolder(): void {
+  gdriveFolderId.value = currentPickerFolderId.value;
+  gdriveCurrentName.value = currentPickerFolderName.value || 'My Drive';
+  gdriveError.value = '';
+  pickerOpen.value = false;
+}
+
 async function loadSources(): Promise<void> {
   savedSources.value = await db.getSources();
 }
@@ -211,21 +412,28 @@ async function loadSources(): Promise<void> {
 watch(
   open,
   (isOpen) => {
-    if (isOpen) loadSources().catch(() => undefined);
+    if (isOpen) {
+      googleToken.value = getGoogleToken();
+      gdriveError.value = '';
+      loadSources().catch(() => undefined);
+    }
   },
   { immediate: true },
 );
 
 function useSource(source: SourceRecord): void {
   if (source.type !== 's3' || 'handle' in source.config) return;
-  const cfg = source.config;
+  const cfg = source.config as S3Config;
   s3Form.value = { ...cfg, sessionToken: cfg.sessionToken ?? '' };
   sourceType.value = 's3';
 }
 
 function rescanSource(source: SourceRecord): void {
   if (source.type === 's3' && !('handle' in source.config)) {
-    libraryStore.startScan(source.config, source.name);
+    libraryStore.startScan(source.config as S3Config, source.name);
+  } else if (source.type === 'gdrive' && 'folderId' in source.config) {
+    const token = getGoogleToken();
+    if (token) libraryStore.startScan({ folderId: (source.config as { folderId: string }).folderId, token }, source.name);
   } else if ('handle' in source.config) {
     libraryStore.startScan({ handle: source.config.handle }, source.name);
   }
@@ -251,6 +459,7 @@ function removeSource(source: SourceRecord): void {
 const canScan = computed(() => {
   if (sourceType.value === 'server') return serverFolder.value.trim().length > 0;
   if (sourceType.value === 'local') return !!localHandle.value;
+  if (sourceType.value === 'gdrive') return !!googleToken.value && !!gdriveFolderId.value;
   const f = s3Form.value;
   return !!(f.endpoint && f.bucket && f.region && f.accessKey && f.secretKey);
 });
@@ -268,6 +477,19 @@ async function startScan() {
     });
     await loadSources();
     libraryStore.startScan(source, sourceName);
+    open.value = false;
+  } else if (sourceType.value === 'gdrive') {
+    const token = getGoogleToken();
+    if (!token) return;
+    const folderId = gdriveFolderId.value.trim();
+    const sourceName = `gdrive-${folderId}`;
+    await db.putSource(sourceName, {
+      name: sourceName,
+      type: 'gdrive' as const,
+      config: { folderId, folderName: gdriveCurrentName.value || folderId },
+    });
+    await loadSources();
+    libraryStore.startScan({ folderId, folderName: gdriveCurrentName.value || folderId, token }, sourceName);
     open.value = false;
   } else if (sourceType.value === 's3') {
     const cfg = { ...s3Form.value };
@@ -323,3 +545,23 @@ async function scanServerFolder() {
   }
 }
 </script>
+
+<style scoped>
+.picker-card {
+  background: #1a1a2e;
+  color: white;
+  display: flex;
+  flex-direction: column;
+  max-width: 560px;
+  margin: auto;
+  border-radius: 8px;
+}
+
+.breadcrumb .q-btn {
+  max-width: 180px;
+}
+
+.breadcrumb .q-btn :deep(.q-btn__content) {
+  text-transform: none;
+}
+</style>

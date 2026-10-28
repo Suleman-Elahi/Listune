@@ -24,7 +24,7 @@ export const useLibraryStore = defineStore('library', () => {
     results.value = [...results.value, ...more];
   }
 
-  function startScan(source: S3Config | LocalSource, sourceName?: string): void {
+  function startScan(source: S3Config | LocalSource | { folderId: string; folderName?: string; token: string }, sourceName?: string): void {
     isScanning.value = true;
     scanProgress.value = null;
 

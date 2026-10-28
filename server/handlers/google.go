@@ -26,7 +26,7 @@ func GoogleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	scopes := "openid email profile"
+	scopes := "openid email profile https://www.googleapis.com/auth/drive.readonly"
 
 	params := url.Values{
 		"client_id":     {clientID},

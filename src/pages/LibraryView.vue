@@ -65,10 +65,26 @@
 
     <!-- Scan progress -->
     <div v-if="libraryStore.isScanning" class="scan-progress">
-      <q-linear-progress :value="scanRatio" color="light-green-6" track-color="grey-9" class="q-mb-xs" />
+      <q-linear-progress
+        :value="scanRatio"
+        :indeterminate="scanUnknownTotal"
+        color="light-green-6"
+        track-color="grey-9"
+        class="q-mb-xs"
+      />
       <div class="scan-label">
-        Scanning {{ libraryStore.scanProgress?.scanned ?? 0 }} / {{ libraryStore.scanProgress?.total ?? '...' }}
-        <span v-if="(libraryStore.scanProgress?.errors ?? 0) > 0" class="text-warning"> · {{ libraryStore.scanProgress?.errors }} errors</span>
+        <template v-if="scanUnknownTotal">Scanning… listing files</template>
+        <template v-else>
+          Scanning {{ libraryStore.scanProgress?.scanned ?? 0 }} / {{ libraryStore.scanProgress?.total ?? 0 }}
+          <span v-if="(libraryStore.scanProgress?.errors ?? 0) > 0" class="text-warning"> · {{ libraryStore.scanProgress?.errors }} errors</span>
+        </template>
+      </div>
+    </div>
+    <div v-else-if="libraryStore.scanError" class="scan-progress">
+      <div class="scan-error">
+        <q-icon name="error_outline" size="14px" class="q-mr-xs" />
+        {{ libraryStore.scanError }}
+        <q-btn flat dense size="sm" label="Dismiss" color="primary" class="q-ml-sm" @click="libraryStore.scanError = ''" />
       </div>
     </div>
 
@@ -409,6 +425,9 @@ const scanRatio = computed(() => {
   if (!p || p.total === 0) return 0;
   return p.scanned / p.total;
 });
+
+/** Total is only known once the source has been fully listed. */
+const scanUnknownTotal = computed(() => (libraryStore.scanProgress?.total ?? 0) === 0);
 
 const filteredTracks = computed<Track[]>(() => libraryStore.results);
 
@@ -923,6 +942,13 @@ onMounted(() => { libraryStore.search(''); });
 .scan-label {
   font-size: 11px;
   color: rgba(255, 255, 255, 0.45);
+}
+
+.scan-error {
+  display: flex;
+  align-items: center;
+  font-size: 12px;
+  color: #f87171;
 }
 
 /* ── Library heading ── */

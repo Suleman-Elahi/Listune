@@ -271,6 +271,35 @@ export const usePlayerStore = defineStore('player', {
       }
     },
 
+    /** Drop queue entries that can no longer play:
+     *  - the track record is gone (deleted / half-finished import), or
+     *  - the track's saved source no longer exists (leftover from a removed
+     *    or broken integration). */
+    async pruneQueue(): Promise<void> {
+      const sources = await db.getSources();
+      const sourceNames = new Set(sources.map((s) => s.name));
+      const tracks = await Promise.all(this.queue.map((id) => db.getTrack(id)));
+
+      const kept: string[] = [];
+      this.queue.forEach((id, i) => {
+        const track = tracks[i];
+        if (!track) return;
+        if (track.sourceName && !sourceNames.has(track.sourceName)) return;
+        kept.push(id);
+      });
+
+      if (kept.length !== this.queue.length) {
+        this.queue = kept;
+      }
+      if (this.currentTrackId && !kept.includes(this.currentTrackId)) {
+        if (this.isPlaying) {
+          this.stop();
+        } else {
+          this.currentTrackId = null;
+        }
+      }
+    },
+
     /** Persist queue + current track to backend */
     async persistQueue(): Promise<void> {
       await backend.putState('player_queue', {
@@ -299,6 +328,8 @@ export const usePlayerStore = defineStore('player', {
         this.volume = saved.volume ?? 1;
         _engine.setVolume(this.volume);
       }
+      // Remove leftovers from imports/sources that no longer exist.
+      await this.pruneQueue();
     },
   },
 });

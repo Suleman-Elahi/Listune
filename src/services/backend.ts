@@ -3,6 +3,22 @@
 
 const BASE_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8090';
 
+/** HTTP failure from the backend; `status` lets callers react to 401s. */
+export class BackendHttpError extends Error {
+  readonly status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = 'BackendHttpError';
+    this.status = status;
+  }
+}
+
+/** True when the failure means the Google session is gone. */
+export function isAuthError(err: unknown): boolean {
+  return err instanceof BackendHttpError && err.status === 401;
+}
+
 export interface IdentifyResult {
   title?: string;
   artist?: string;
@@ -141,7 +157,10 @@ export const backend = {
 
   /** List Google Drive folders under a parent (root if omitted). */
   async gdriveFolders(parentId: string | undefined, token: string): Promise<{ id: string; name: string; mimeType: string }[]> {
-    const res = await fetch(`${BASE_URL}/api/gdrive/folders?parentId=${encodeURIComponent(parentId || 'root')}&token=${encodeURIComponent(token)}`);
+    const res = await fetch(
+      `${BASE_URL}/api/gdrive/folders?parentId=${encodeURIComponent(parentId || 'root')}&token=${encodeURIComponent(token)}`,
+      { signal: AbortSignal.timeout(30000) },
+    );
     if (!res.ok) {
       let detail = '';
       try {
@@ -150,16 +169,24 @@ export const backend = {
       } catch {
         // ignore
       }
-      throw new Error(`Drive request failed (${res.status})${detail}`);
+      throw new BackendHttpError(res.status, `Drive request failed (${res.status})${detail}`);
     }
-    return res.json();
+    const data: unknown = await res.json();
+    // The backend may encode an empty list as `null`; never let it reach a template.
+    return Array.isArray(data) ? (data as { id: string; name: string; mimeType: string }[]) : [];
   },
 
   /** Recursively list audio files under a Google Drive folder. */
   async gdriveFiles(folderId: string, token: string): Promise<{ id: string; name: string; mimeType: string; size?: string }[]> {
-    const res = await fetch(`${BASE_URL}/api/gdrive/files?folderId=${encodeURIComponent(folderId)}&token=${encodeURIComponent(token)}`);
+    const res = await fetch(
+      `${BASE_URL}/api/gdrive/files?folderId=${encodeURIComponent(folderId)}&token=${encodeURIComponent(token)}`,
+      { signal: AbortSignal.timeout(180000) },
+    );
     if (!res.ok) return [];
-    return res.json();
+    const data: unknown = await res.json();
+    return Array.isArray(data)
+      ? (data as { id: string; name: string; mimeType: string; size?: string }[])
+      : [];
   },
 
   /** Streaming URL for a Google Drive file. */

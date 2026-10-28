@@ -8,6 +8,7 @@ export const useLibraryStore = defineStore('library', () => {
   const results = ref<Track[]>([]);
   const scanProgress = ref<ScanProgress | null>(null);
   const isScanning = ref(false);
+  const scanError = ref('');
 
   async function search(query: string): Promise<void> {
     searchQuery.value = query;
@@ -26,7 +27,10 @@ export const useLibraryStore = defineStore('library', () => {
 
   function startScan(source: S3Config | LocalSource | { folderId: string; folderName?: string; token: string }, sourceName?: string): void {
     isScanning.value = true;
-    scanProgress.value = null;
+    scanError.value = '';
+    // Start with an empty (unknown-total) progress so the UI can show that the
+    // scan is running instead of looking frozen while the file list is fetched.
+    scanProgress.value = { scanned: 0, total: 0, errors: 0 };
 
     const worker = new Worker(
       new URL('../workers/scanner.worker.ts', import.meta.url),
@@ -43,15 +47,20 @@ export const useLibraryStore = defineStore('library', () => {
         };
       } else if (msg.type === 'complete') {
         isScanning.value = false;
+        if (msg.total === 0) {
+          scanError.value = 'No audio files found in this source';
+        }
         worker.terminate();
       } else if (msg.type === 'error') {
         isScanning.value = false;
+        scanError.value = typeof msg.message === 'string' && msg.message ? msg.message : 'Scan failed';
         worker.terminate();
       }
     };
 
     worker.onerror = () => {
       isScanning.value = false;
+      scanError.value = 'Scan failed to run';
       worker.terminate();
     };
 
@@ -64,6 +73,7 @@ export const useLibraryStore = defineStore('library', () => {
     results,
     scanProgress,
     isScanning,
+    scanError,
     search,
     loadMore,
     startScan,

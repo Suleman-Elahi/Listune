@@ -11,10 +11,12 @@ import (
 )
 
 const (
-	googleAuthURL  = "https://accounts.google.com/o/oauth2/v2/auth"
-	googleTokenURL = "https://oauth2.googleapis.com/token"
+	googleAuthURL = "https://accounts.google.com/o/oauth2/v2/auth"
 	googleUserInfo = "https://www.googleapis.com/oauth2/v2/userinfo"
 )
+
+// googleTokenURL is a var so tests can point it at a stub server.
+var googleTokenURL = "https://oauth2.googleapis.com/token"
 
 // GoogleLogin redirects user to Google's OAuth consent page.
 func GoogleLogin(w http.ResponseWriter, r *http.Request) {
@@ -33,8 +35,10 @@ func GoogleLogin(w http.ResponseWriter, r *http.Request) {
 		"response_type": {"code"},
 		"redirect_uri":  {redirectURI},
 		"scope":         {scopes},
-		"access_type":   {"offline"},
-		"prompt":        {"select_account"},
+		// offline is required to receive a refresh_token; consent makes sure
+		// Google actually returns one instead of omitting it on later logins.
+		"access_type": {"offline"},
+		"prompt":      {"select_account consent"},
 	}
 
 	http.Redirect(w, r, googleAuthURL+"?"+params.Encode(), http.StatusTemporaryRedirect)
@@ -87,7 +91,7 @@ func GoogleCallback(w http.ResponseWriter, r *http.Request) {
 	json.Unmarshal(body, &tokenResp)
 
 	// Fetch user profile
-	req, _ := http.NewRequest("GET", googleUserInfo, nil)
+	req, _ := http.NewRequestWithContext(r.Context(), "GET", googleUserInfo, nil)
 	req.Header.Set("Authorization", "Bearer "+tokenResp.AccessToken)
 
 	userResp, err := http.DefaultClient.Do(req)
@@ -105,13 +109,25 @@ func GoogleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	userBody, _ := io.ReadAll(userResp.Body)
 	json.Unmarshal(userBody, &userInfo)
+	if userInfo.ID == "" {
+		http.Error(w, `{"error":"failed to fetch user info"}`, http.StatusBadGateway)
+		return
+	}
+
+	// Keep the refresh token server-side and hand the frontend an opaque,
+	// long-lived handle instead of the 1-hour access token.
+	token, err := createGoogleSession(userInfo.ID, userInfo.Email, tokenResp.AccessToken, tokenResp.RefreshToken, tokenResp.ExpiresIn)
+	if err != nil {
+		http.Error(w, `{"error":"could not store google session"}`, http.StatusBadGateway)
+		return
+	}
 
 	// Redirect back to frontend with user info
 	params := url.Values{
 		"email":   {userInfo.Email},
 		"name":    {userInfo.Name},
 		"picture": {userInfo.Picture},
-		"token":   {tokenResp.AccessToken},
+		"token":   {token},
 	}
 
 	redirectURL := fmt.Sprintf("%s/#/google-callback?%s", frontendOrigin, params.Encode())

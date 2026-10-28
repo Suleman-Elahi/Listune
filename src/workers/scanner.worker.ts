@@ -277,7 +277,7 @@ async function scanS3(cfg: S3Config, sourceName: string): Promise<void> {
   }
 
   if (!cancelled) {
-    self.postMessage({ type: 'complete' });
+    self.postMessage({ type: 'complete', scanned, total });
     self.close();
   }
 }
@@ -381,7 +381,7 @@ async function scanLocal(source: LocalSource, sourceName: string): Promise<void>
   }
 
   if (!cancelled) {
-    self.postMessage({ type: 'complete' });
+    self.postMessage({ type: 'complete', scanned, total });
     self.close();
   }
 }
@@ -390,9 +390,18 @@ async function scanLocal(source: LocalSource, sourceName: string): Promise<void>
 async function scanGDrive(source: { folderId: string; folderName?: string; token: string }, sourceName: string): Promise<void> {
   let files: { id: string; name: string; mimeType: string; size?: string }[];
   try {
-    const res = await fetch(`${BASE_URL}/api/gdrive/files?folderId=${encodeURIComponent(source.folderId)}&token=${encodeURIComponent(source.token)}`);
-    if (!res.ok) throw new Error(`list failed: ${res.status}`);
-    files = await res.json();
+    const res = await fetch(`${BASE_URL}/api/gdrive/files?folderId=${encodeURIComponent(source.folderId)}&token=${encodeURIComponent(source.token)}`, {
+      signal: AbortSignal.timeout(180000),
+    });
+    if (!res.ok) {
+      if (res.status === 401) throw new Error('Google session expired. Sign in again.');
+      throw new Error(`list failed: ${res.status}`);
+    }
+    const data: unknown = await res.json();
+    // Backend sends `null` for an empty listing; treat anything non-array as empty.
+    files = Array.isArray(data)
+      ? (data as { id: string; name: string; mimeType: string; size?: string }[])
+      : [];
   } catch (err) {
     self.postMessage({ type: 'error', message: String(err) });
     return;
@@ -415,6 +424,11 @@ async function scanGDrive(source: { folderId: string; folderName?: string; token
         const res = await fetch(`${BASE_URL}/api/gdrive/stream?fileId=${encodeURIComponent(f.id)}&token=${encodeURIComponent(source.token)}`, {
           headers: { Range: `bytes=0-${RANGE_BYTES - 1}` },
         });
+        if (res.status === 401) {
+          // Session died mid-scan: stop instead of counting every file as an error.
+          self.postMessage({ type: 'error', message: 'Google session expired. Sign in again.' });
+          return;
+        }
         if (!res.ok && res.status !== 206) {
           errors++;
           continue;
@@ -473,7 +487,7 @@ async function scanGDrive(source: { folderId: string; folderName?: string; token
     self.postMessage({ type: 'progress', scanned, total, errors });
   }
   if (!cancelled) {
-    self.postMessage({ type: 'complete' });
+    self.postMessage({ type: 'complete', scanned, total });
     self.close();
   }
 }

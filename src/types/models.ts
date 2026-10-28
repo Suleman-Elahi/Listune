@@ -48,7 +48,7 @@ export type WorkerInMessage =
 
 export type WorkerOutMessage =
   | { type: 'progress'; scanned: number; total: number; errors: number }
-  | { type: 'complete' }
+  | { type: 'complete'; scanned?: number; total?: number }
   | { type: 'error'; message: string };
 
 export interface MusicPlayerDB extends DBSchema {

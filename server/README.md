@@ -63,6 +63,16 @@ go mod tidy
 go run .
 ```
 
+### Google Drive auth
+
+The frontend never receives a Google access token. `/auth/google/callback` stores
+the access + refresh tokens in `data/gtokens/` (gitignored, mode 0600) and hands
+the browser an opaque `<key>.<secret>` handle. Every `/api/gdrive/*` request
+resolves that handle to a freshly-refreshed access token server-side, so sessions
+survive the 1-hour access-token expiry. A `401` from these endpoints means the
+refresh token is gone (revoked or pre-session legacy token) and the user must
+sign in again.
+
 ## Docker
 
 ```bash

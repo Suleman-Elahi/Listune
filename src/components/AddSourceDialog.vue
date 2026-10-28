@@ -239,15 +239,24 @@
         <div v-else-if="pickerError" class="column items-center q-pa-lg">
           <q-icon name="error_outline" size="32px" color="negative" />
           <div class="text-negative q-mt-sm" style="font-size: 13px;">{{ pickerError }}</div>
-          <q-btn flat dense color="primary" label="Retry" class="q-mt-sm" @click="loadPickerFolders" />
+          <div class="row q-mt-sm q-gutter-sm">
+            <q-btn
+              v-if="pickerErrorStatus === 401"
+              unelevated
+              color="primary"
+              label="Sign in with Google"
+              @click="backend.loginGoogle()"
+            />
+            <q-btn flat dense color="primary" label="Retry" @click="loadPickerFolders" />
+          </div>
         </div>
-        <div v-else-if="pickerFolders.length === 0" class="column items-center q-pa-lg">
+        <div v-else-if="pickerList.length === 0" class="column items-center q-pa-lg">
           <q-icon name="folder_open" size="32px" color="grey-6" />
           <div class="text-grey-5 q-mt-sm" style="font-size: 13px;">No subfolders here</div>
         </div>
         <q-list v-else dense dark separator>
           <q-item
-            v-for="f in pickerFolders"
+            v-for="f in pickerList"
             :key="f.id"
             clickable
             v-ripple
@@ -285,8 +294,9 @@
 import { ref, computed, watch } from 'vue';
 import { useQuasar } from 'quasar';
 import { useLibraryStore } from 'src/stores/libraryStore';
+import { usePlayerStore } from 'src/stores/playerStore';
 import { db } from 'src/services/db';
-import { backend } from 'src/services/backend';
+import { backend, isAuthError } from 'src/services/backend';
 import { s3SourceId } from 'src/services/sigv4';
 import type { S3Config, LocalSource, SourceRecord, Track } from 'src/types/models';
 
@@ -294,6 +304,7 @@ const open = defineModel<boolean>({ default: false });
 
 const $q = useQuasar();
 const libraryStore = useLibraryStore();
+const playerStore = usePlayerStore();
 const savedSources = ref<SourceRecord[]>([]);
 const sourceType = ref<'server' | 'local' | 's3' | 'gdrive'>('server');
 const showSecret = ref(false);
@@ -336,6 +347,8 @@ const gdriveError = ref('');
 const pickerOpen = ref(false);
 const pickerLoading = ref(false);
 const pickerError = ref('');
+/** HTTP status of the last picker failure; 401 means "sign in again". */
+const pickerErrorStatus = ref<number | null>(null);
 const pickerFolders = ref<{ id: string; name: string; mimeType: string }[]>([]);
 /** Navigation stack; empty = My Drive root. */
 const pickerPath = ref<{ id: string; name: string }[]>([]);
@@ -346,6 +359,8 @@ const currentPickerFolderId = computed(
 const currentPickerFolderName = computed(
   () => pickerPath.value[pickerPath.value.length - 1]?.name ?? '',
 );
+/** Guaranteed array — a null payload must never reach `.length` in the render. */
+const pickerList = computed(() => pickerFolders.value ?? []);
 
 function getGoogleToken(): string | null {
   try {
@@ -364,17 +379,34 @@ async function loadPickerFolders(): Promise<void> {
   const token = getGoogleToken();
   if (!token) {
     pickerError.value = 'Not signed in with Google';
+    pickerErrorStatus.value = 401;
     return;
   }
   pickerLoading.value = true;
   pickerError.value = '';
+  pickerErrorStatus.value = null;
   try {
-    pickerFolders.value = await backend.gdriveFolders(currentPickerFolderId.value, token);
+    const folders = await backend.gdriveFolders(currentPickerFolderId.value, token);
+    pickerFolders.value = Array.isArray(folders) ? folders : [];
   } catch (err) {
-    pickerError.value = err instanceof Error ? err.message : 'Failed to load folders from Google Drive';
+    pickerFolders.value = [];
+    pickerErrorStatus.value = isAuthError(err) ? 401 : null;
+    pickerError.value = describePickerError(err);
+    if (pickerErrorStatus.value === 401) {
+      // Drop the stale handle so the tab offers "Sign in with Google".
+      googleToken.value = null;
+    }
   } finally {
     pickerLoading.value = false;
   }
+}
+
+function describePickerError(err: unknown): string {
+  if (isAuthError(err)) return 'Your Google session has expired. Sign in again to browse Drive.';
+  if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
+    return 'Google Drive took too long to respond. Try again.';
+  }
+  return err instanceof Error ? err.message : 'Failed to load folders from Google Drive';
 }
 
 function openFolderPicker(): void {
@@ -452,6 +484,8 @@ function removeSource(source: SourceRecord): void {
       await db.deleteSource(source.name);
       await loadSources();
       await libraryStore.search(libraryStore.searchQuery);
+      // Drop queue entries that belonged to the removed source.
+      await playerStore.pruneQueue();
     })();
   });
 }

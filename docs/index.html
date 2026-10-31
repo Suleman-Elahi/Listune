@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#0b0d12" />
+  <meta name="color-scheme" content="dark" />
+  <title>Listune — Free Music Player PWA for Local, S3 &amp; Google Drive</title>
+  <meta
+    name="description"
+    content="Listune is a free, open-source, dark-themed music player PWA for local folders, S3 buckets and Google Drive — with built-in Soulseek search, automatic audio fingerprinting, tagging, playlists and a real-time visualizer."
+  />
+  <meta
+    name="keywords"
+    content="Listune, music player, music player PWA, self-hosted music, local music player, S3 music player, Google Drive music player, Soulseek client, Soulseek search, audio fingerprinting, AcoustID, MusicBrainz, music visualizer, open source music player, Vue music player"
+  />
+  <meta name="author" content="Suleman Elahi" />
+  <meta name="application-name" content="Listune" />
+  <meta name="robots" content="index, follow, max-image-preview:large" />
+  <link rel="canonical" href="https://suleman-elahi.github.io/Listune/" />
+  <link rel="sitemap" type="application/xml" href="sitemap.xml" />
+
+  <!-- Open Graph -->
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="Listune" />
+  <meta property="og:title" content="Listune — Your music. Everywhere." />
+  <meta
+    property="og:description"
+    content="A dark, mobile-first music player PWA with local, S3 and Google Drive playback, built-in Soulseek search, smart tagging and a real-time visualizer."
+  />
+  <meta property="og:url" content="https://suleman-elahi.github.io/Listune/" />
+  <meta
+    property="og:image"
+    content="https://suleman-elahi.github.io/Listune/images/Listune%20-%20Player%20Visualization%20%26%20Artwork.png"
+  />
+  <meta property="og:image:alt" content="Listune now-playing screen with album artwork and a lime-green frequency visualizer" />
+  <meta property="og:image:width" content="768" />
+  <meta property="og:image:height" content="768" />
+  <meta property="og:locale" content="en_US" />
+
+  <!-- Twitter -->
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Listune — Your music. Everywhere." />
+  <meta
+    name="twitter:description"
+    content="A dark, mobile-first music player PWA with local, S3 and Google Drive playback, built-in Soulseek search, smart tagging and a real-time visualizer."
+  />
+  <meta
+    name="twitter:image"
+    content="https://suleman-elahi.github.io/Listune/images/Listune%20-%20Player%20Visualization%20%26%20Artwork.png"
+  />
+
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%23a3e635'/%3E%3Cpath d='M9 18V6l10-2v12' fill='none' stroke='%230b0d12' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3Ccircle cx='6' cy='18' r='3' fill='%230b0d12'/%3E%3Ccircle cx='16' cy='16' r='3' fill='%230b0d12'/%3E%3C/svg%3E" />
+  <link rel="preload" as="image" href="images/Listune%20-%20Player%20Visualization%20%26%20Artwork.png" fetchpriority="high" />
+  <link rel="stylesheet" href="styles.css" />
+
+  <!-- Structured data -->
+  <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@graph": [
+        {
+          "@type": "WebSite",
+          "@id": "https://suleman-elahi.github.io/Listune/#website",
+          "url": "https://suleman-elahi.github.io/Listune/",
+          "name": "Listune",
+          "description": "A dark, mobile-first music player PWA with local, S3 and Google Drive playback, built-in Soulseek search, smart tagging and a real-time visualizer.",
+          "inLanguage": "en"
+        },
+        {
+          "@type": "SoftwareApplication",
+          "@id": "https://suleman-elahi.github.io/Listune/#app",
+          "name": "Listune",
+          "applicationCategory": "MultimediaApplication",
+          "applicationSubCategory": "Music Player",
+          "operatingSystem": "Web",
+          "url": "https://suleman-elahi.github.io/Listune/",
+          "downloadUrl": "https://github.com/Suleman-Elahi/Listune",
+          "description": "A free, open-source music player PWA for local folders, S3 buckets and Google Drive, with built-in Soulseek search, audio fingerprinting, tagging, playlists and a real-time visualizer.",
+          "image": "https://suleman-elahi.github.io/Listune/images/Listune%20-%20Player%20Visualization%20%26%20Artwork.png",
+          "screenshot": "https://suleman-elahi.github.io/Listune/images/Listune%20-%20Library%20and%20Artist%20Organization.png",
+          "license": "https://github.com/Suleman-Elahi/Listune/blob/main/LICENSE",
+          "isAccessibleForFree": true,
+          "offers": {
+            "@type": "Offer",
+            "price": "0",
+            "priceCurrency": "USD"
+          },
+          "featureList": [
+            "Play local folders, S3 buckets and Google Drive audio",
+            "Built-in Soulseek search and downloads",
+            "AcoustID and MusicBrainz audio fingerprinting",
+            "Automatic music tagging and cover art",
+            "Playlists and queue management",
+            "Real-time frequency visualizer",
+            "Offline PWA support",
+            "Keyboard shortcuts and media session controls"
+          ],
+          "author": {
+            "@type": "Person",
+            "name": "Suleman Elahi",
+            "url": "https://github.com/Suleman-Elahi"
+          }
+        },
+        {
+          "@type": "FAQPage",
+          "@id": "https://suleman-elahi.github.io/Listune/#faq",
+          "mainEntity": [
+            {
+              "@type": "Question",
+              "name": "What is Listune?",
+              "acceptedAnswer": {
+                "@type": "Answer",
+                "text": "Listune is a free, open-source, dark-themed music player PWA that plays audio from local folders, S3 buckets and Google Drive, and includes built-in Soulseek search, automatic tagging, playlists and a real-time visualizer."
+              }
+            },
+            {
+              "@type": "Question",
+              "name": "Does Listune work offline?",
+              "acceptedAnswer": {
+                "@type": "Answer",
+                "text": "Yes. Listune is a progressive web app with a service worker that caches the app shell, so the interface loads offline. Audio itself streams from your chosen source."
+              }
+            },
+            {
+              "@type": "Question",
+              "name": "Does Listune support Soulseek?",
+              "acceptedAnswer": {
+                "@type": "Answer",
+                "text": "Yes. Search the Soulseek network directly from the library search bar, filter by MP3 or FLAC and bitrate, watch download progress inline, and finished tracks appear in your library automatically."
+              }
+            },
+            {
+              "@type": "Question",
+              "name": "Is Listune free?",
+              "acceptedAnswer": {
+                "@type": "Answer",
+                "text": "Yes. Listune is free and open source. You can self-host the frontend and Go backend and use your own storage."
+              }
+            }
+          ]
+        }
+      ]
+    }
+  </script>
+</head>
+<body>
+  <a class="skip-link" href="#top">Skip to content</a>
+  <header class="site-header">
+    <a class="brand" href="#top" aria-label="Listune home">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M9 18V6l10-2v12" />
+          <circle cx="6" cy="18" r="3" />
+          <circle cx="16" cy="16" r="3" />
+        </svg>
+      </span>
+      <span class="brand-name">Listune</span>
+    </a>
+    <nav class="site-nav" aria-label="Sections">
+      <a href="#sources">Sources</a>
+      <a href="#library">Library</a>
+      <a href="#soulseek">Soulseek</a>
+      <a href="#player">Player</a>
+      <a href="#faq">FAQ</a>
+    </nav>
+    <a class="btn btn-ghost btn-small" href="https://github.com/Suleman-Elahi/Listune">GitHub</a>
+  </header>
+
+  <main id="top">
+    <!-- Hero -->
+    <section class="hero">
+      <div class="hero-glow hero-glow-blue" aria-hidden="true"></div>
+      <div class="hero-glow hero-glow-green" aria-hidden="true"></div>
+      <div class="hero-inner">
+        <p class="eyebrow">PWA · Vue 3 · Go</p>
+        <h1>Your music.<br /><span class="gradient-text">Everywhere.</span></h1>
+        <p class="lede">
+          A dark, mobile-first player for local files, S3 and Google Drive —
+          with built-in Soulseek search, smart tagging and a real-time visualizer.
+        </p>
+        <div class="hero-actions">
+          <a class="btn btn-primary" href="#soulseek">Explore features</a>
+          <a class="btn btn-ghost" href="https://github.com/Suleman-Elahi/Listune">View source</a>
+        </div>
+        <figure class="hero-shot reveal">
+          <img
+            src="images/Listune%20-%20Player%20Visualization%20%26%20Artwork.png"
+            alt="Listune now-playing screen showing album artwork beside the lime-green frequency visualizer"
+            width="768" height="768" fetchpriority="high"
+          />
+        </figure>
+      </div>
+    </section>
+
+    <!-- Feature highlights -->
+    <section class="features" aria-labelledby="highlights-title">
+      <h2 id="highlights-title" class="sr-only">Why Listune</h2>
+      <div class="feature-grid">
+        <div class="feature reveal">
+          <span class="feature-dot dot-blue" aria-hidden="true"></span>
+          <h3>Local, S3 &amp; Drive</h3>
+          <p>Add folders, buckets and cloud drives without uploading a thing.</p>
+        </div>
+        <div class="feature reveal">
+          <span class="feature-dot dot-green" aria-hidden="true"></span>
+          <h3>Soulseek inside search</h3>
+          <p>Find and download tracks without leaving your library.</p>
+        </div>
+        <div class="feature reveal">
+          <span class="feature-dot dot-purple" aria-hidden="true"></span>
+          <h3>Auto tagging</h3>
+          <p>Fingerprint untagged files, then write metadata back to disk.</p>
+        </div>
+        <div class="feature reveal">
+          <span class="feature-dot dot-amber" aria-hidden="true"></span>
+          <h3>Plays offline</h3>
+          <p>A service worker keeps the app shell ready on the go.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Sources -->
+    <section class="split" id="sources">
+      <div class="split-media reveal">
+        <img
+          src="images/Listune%20-%20Import%20Music.png"
+          alt="Add Music Source dialog with local folder, S3 cloud and Google Drive tabs, next to a Google Drive folder browser"
+          width="768" height="768" loading="lazy"
+        />
+      </div>
+      <div class="split-copy reveal">
+        <p class="eyebrow">Sources</p>
+        <h2>Bring all your music together</h2>
+        <p class="body">
+          Point Listune at a local folder, an S3 bucket or a Google Drive folder.
+          Everything is indexed in the background and played straight from the source.
+        </p>
+        <ul class="ticks">
+          <li>Local folders via the File System Access API</li>
+          <li>S3-compatible buckets with pre-signed URLs</li>
+          <li>Google Drive streaming through the backend</li>
+          <li>Server library folder for downloads and imports</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- Library -->
+    <section class="split split-reverse" id="library">
+      <div class="split-media reveal">
+        <img
+          src="images/Listune%20-%20Library%20and%20Artist%20Organization.png"
+          alt="Listune library showing a numbered track list and an artist grid view"
+          width="768" height="768" loading="lazy"
+        />
+      </div>
+      <div class="split-copy reveal">
+        <p class="eyebrow">Library</p>
+        <h2>Organized without the busywork</h2>
+        <p class="body">
+          Tags are read in a background worker — title, artist, album, artwork and duration —
+          with a filename fallback when metadata is missing.
+        </p>
+        <ul class="ticks">
+          <li>All Songs, Artists and Albums views</li>
+          <li>Instant search with virtual scrolling</li>
+          <li>Lazy-loaded artwork thumbnails</li>
+          <li>One click to identify and tag untagged tracks</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- Soulseek -->
+    <section class="split" id="soulseek">
+      <div class="split-media reveal">
+        <img
+          src="images/Listune%20-%20Playlist%20and%20Soulweek%20Search.png"
+          alt="Listune playlists screen next to a Soulseek search with faded download placeholders and progress"
+          width="768" height="768" loading="lazy"
+        />
+      </div>
+      <div class="split-copy reveal">
+        <p class="eyebrow eyebrow-green">Soulseek</p>
+        <h2>Search the network, right here</h2>
+        <p class="body">
+          Press Enter in the search bar and Listune queries the Soulseek network.
+          Library matches come first, then downloadable results.
+        </p>
+        <ul class="ticks">
+          <li>MP3 or FLAC with optional bitrate filter</li>
+          <li>Search options remembered between sessions</li>
+          <li>Faded placeholders show live download progress</li>
+          <li>Finished tracks drop into your library automatically</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- Player -->
+    <section class="split split-reverse" id="player">
+      <div class="split-media reveal">
+        <img
+          src="images/Listune%20-%20Player%20Visualization%20%26%20Artwork.png"
+          alt="Now playing screen with album art and a glowing green frequency visualizer"
+          width="768" height="768" loading="lazy"
+        />
+      </div>
+      <div class="split-copy reveal">
+        <p class="eyebrow">Player</p>
+        <h2>A player worth watching</h2>
+        <p class="body">
+          A full-screen dark player with a glowing seek bar, metallic transport
+          controls and a lime-green frequency visualizer rendered off the main thread.
+        </p>
+        <ul class="ticks">
+          <li>Album art and visualizer modes</li>
+          <li>Shuffle, loop and queue control</li>
+          <li>Lock-screen controls via the Media Session API</li>
+          <li>Keyboard shortcuts for everything</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- Playlists -->
+    <section class="split" id="playlists">
+      <div class="split-media reveal">
+        <img
+          src="images/Listune%20-%20Now%20Playing%20Queue%20and%20Playlist%20Player%20.jpg"
+          alt="Listune queue and playlists drawer with saved queue option"
+          width="768" height="768" loading="lazy"
+        />
+      </div>
+      <div class="split-copy reveal">
+        <p class="eyebrow">Playlists</p>
+        <h2>Queue it. Save it. Keep it.</h2>
+        <p class="body">
+          Build playlists, drag your current queue into one and find them again later,
+          sorted the way you like.
+        </p>
+        <ul class="ticks">
+          <li>Create and name playlists</li>
+          <li>Save the current queue as a playlist</li>
+          <li>Sort by recent, alphabetical or artist</li>
+          <li>Persisted locally, ready offline</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- FAQ -->
+    <section class="faq" id="faq" aria-labelledby="faq-title">
+      <p class="eyebrow center">Questions</p>
+      <h2 id="faq-title" class="center">Frequently asked</h2>
+      <div class="faq-list">
+        <details class="faq-item reveal">
+          <summary>What is Listune?</summary>
+          <p>
+            Listune is a free, open-source, dark-themed music player PWA. It plays audio from
+            local folders, S3 buckets and Google Drive, and includes built-in Soulseek search,
+            automatic audio fingerprinting and tagging, playlists and a real-time visualizer.
+          </p>
+        </details>
+        <details class="faq-item reveal">
+          <summary>Does Listune work offline?</summary>
+          <p>
+            Yes. Listune is a progressive web app; a service worker caches the app shell so the
+            interface loads offline. Audio streams from the source you choose.
+          </p>
+        </details>
+        <details class="faq-item reveal">
+          <summary>Does Listune support Soulseek?</summary>
+          <p>
+            Yes. Search the network straight from the library search bar, filter by MP3 or FLAC
+            and bitrate, watch download progress inline, and finished tracks land in your library.
+          </p>
+        </details>
+        <details class="faq-item reveal">
+          <summary>Is Listune free?</summary>
+          <p>
+            Yes. Listune is free and open source — self-host the frontend and Go backend and use
+            your own storage.
+          </p>
+        </details>
+      </div>
+    </section>
+
+    <!-- Tech -->
+    <section class="tech" aria-labelledby="tech-title">
+      <h2 id="tech-title" class="eyebrow center">Under the hood</h2>
+      <div class="pills">
+        <span>Vue 3</span>
+        <span>Quasar</span>
+        <span>TypeScript</span>
+        <span>Pinia</span>
+        <span>IndexedDB</span>
+        <span>Web Audio</span>
+        <span>Go</span>
+        <span>S3 SigV4</span>
+        <span>slsk-client</span>
+        <span>AcoustID</span>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <p>Listune — built for people who love their music.</p>
+    <div class="footer-links">
+      <a href="https://github.com/Suleman-Elahi/Listune">GitHub</a>
+      <a href="https://github.com/Suleman-Elahi/Listune/blob/main/LICENSE">License</a>
+    </div>
+  </footer>
+
+  <script>
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            entry.target.classList.add('is-visible');
+            observer.unobserve(entry.target);
+          }
+        }
+      },
+      { threshold: 0.15 },
+    );
+    document.querySelectorAll('.reveal').forEach((el) => observer.observe(el));
+  </script>
+</body>
+</html>

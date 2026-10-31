@@ -2,7 +2,7 @@
 
 ![Screenshot](screen.png)
 
-A dark-themed, mobile-first music player PWA built with Vue 3, Quasar, and TypeScript. Plays local files and S3-hosted audio with a real-time visualizer, playlist management, audio fingerprinting, and Google account sync.
+A dark-themed, mobile-first music player PWA built with Vue 3, Quasar, and TypeScript. Plays local files, S3 buckets, and Google Drive audio, searches and downloads from Soulseek, with a real-time visualizer, playlists, audio fingerprinting, and music tagging.
 
 ## Features
 
@@ -17,6 +17,8 @@ A dark-themed, mobile-first music player PWA built with Vue 3, Quasar, and TypeS
 ### Library
 - Add local folders via the File System Access API (no upload needed)
 - Add S3 buckets as audio sources (AWS SigV4 pre-signed URLs, multiple buckets, optional session tokens)
+- Add Google Drive folders (OAuth, streamed through the backend)
+- Index a server-side library folder (`LIBRARY_PATH`), including Soulseek downloads
 - Background scanner worker reads ID3/Vorbis/MP4 tags (title, artist, album, artwork, duration)
 - Falls back to filename when tags are missing
 - Search and filter tracks in real time
@@ -24,11 +26,19 @@ A dark-themed, mobile-first music player PWA built with Vue 3, Quasar, and TypeS
 - Artwork thumbnails loaded lazily
 - Add tracks to playlists directly from the library
 
-### Audio Fingerprinting (AcoustID + MusicBrainz)
+### Soulseek
+- Search and download from the Soulseek network right in the library search (press Enter)
+- Library matches shown first, then Soulseek results
+- MP3/FLAC and bitrate filters, persisted in the search options popup
+- Faded placeholder rows show download progress; tracks appear in the library when finished
+- Credentials stored in the system keychain, or via `SOULSEEK_ACCOUNT` / `SOULSEEK_PASSWORD`
+
+### Audio Fingerprinting & Tagging (AcoustID + MusicBrainz)
 - Automatically identifies untagged tracks via audio fingerprinting
 - Uses `fpcalc` (Chromaprint) on the backend to generate fingerprints
 - Queries AcoustID for recording matches, then MusicBrainz for full metadata (title, artist, album, year)
 - One-click "ID untagged tracks" button in the library
+- Writes tags and cover art back to server-library and S3 files
 
 ### Visualizer
 - Real-time frequency bar visualizer using Web Audio API
@@ -75,6 +85,7 @@ A dark-themed, mobile-first music player PWA built with Vue 3, Quasar, and TypeS
 
 ### Authentication
 - Google SSO login (OAuth 2.0 via backend)
+- Google Drive access via `drive.readonly` scope
 - User avatar and logout in the library header
 - Route guard redirects unauthenticated users to login
 
@@ -97,23 +108,22 @@ A dark-themed, mobile-first music player PWA built with Vue 3, Quasar, and TypeS
 - Web Audio API + OffscreenCanvas Web Worker for the visualizer
 - File System Access API for local folder scanning
 - AWS SigV4 for S3 pre-signed URL generation (no SDK dependency)
-- Go backend for OAuth, AcoustID fingerprinting, and MusicBrainz lookups
+- Node bridge (`slsk-client`) for Soulseek search/downloads
+- Go backend for OAuth, Google Drive, AcoustID fingerprinting, MusicBrainz lookups, and tag writing
 
 ## Prerequisites
 
-- Node.js 22+
+- Node.js 22+ (Node 24+ recommended for the Soulseek bridge)
 - Go 1.22+ (for the backend server)
 - `fpcalc` (Chromaprint) — required for audio fingerprinting
+- `libsecret` / GNOME Keyring — required for Soulseek on Linux (optional when using env-var credentials)
 
 ```bash
 # Ubuntu/Debian
-sudo apt install libchromaprint-tools
+sudo apt install libchromaprint-tools libsecret-1-dev
 
 # macOS
 brew install chromaprint
-
-# Verify installation
-fpcalc -version
 ```
 
 ## Getting Started
@@ -130,11 +140,17 @@ quasar dev
 ```bash
 cd server
 cp .env.example .env
-# Fill in GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, ACOUSTID_API_KEY
+# Set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, ACOUSTID_API_KEY
 go run .
 ```
 
 The backend runs on `:8090` by default. The frontend expects it at `http://localhost:8090` (configurable via `VITE_BACKEND_URL` env var).
+
+Soulseek support needs the bridge dependencies once:
+
+```bash
+cd server/soulseek-bridge && npm install
+```
 
 ### Build for Production
 
@@ -142,14 +158,6 @@ The backend runs on `:8090` by default. The frontend expects it at `http://local
 quasar build
 cd server && go build -o listune-server .
 ```
-
-## Planned Features
-
-- [x] ~~Spotify integration~~ (removed — Spotify Web API now requires Premium)
-- [x] MusicBrainz + AcoustID — audio fingerprinting to auto-identify untagged tracks
-- [x] Google SSO — sign in with Google
-- [x] Ultra lightweight build — removed axios, Roboto font, Vue Options API; system font stack, proper PWA caching
-- [x] Artist and album grouping views in the library
 
 ## License
 

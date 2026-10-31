@@ -67,7 +67,13 @@ func WriteTags(w http.ResponseWriter, r *http.Request) {
 
 // writeTagsLocal writes tags to a local file on the server.
 func writeTagsLocal(w http.ResponseWriter, req *WriteTagsRequest) {
-	ext := strings.ToLower(filepath.Ext(req.FilePath))
+	resolved, err := resolveLibraryPath(req.FilePath)
+	if err != nil {
+		writeJSON(w, http.StatusForbidden, WriteTagsResponse{Error: "path outside library"})
+		return
+	}
+
+	ext := strings.ToLower(filepath.Ext(resolved))
 	if ext != ".mp3" {
 		writeJSON(w, http.StatusBadRequest, WriteTagsResponse{
 			Error: "tag writing currently supported for .mp3 files only",
@@ -75,12 +81,12 @@ func writeTagsLocal(w http.ResponseWriter, req *WriteTagsRequest) {
 		return
 	}
 
-	if _, err := os.Stat(req.FilePath); err != nil {
+	if _, err := os.Stat(resolved); err != nil {
 		writeJSON(w, http.StatusNotFound, WriteTagsResponse{Error: "file not found"})
 		return
 	}
 
-	if err := applyTags(req.FilePath, req); err != nil {
+	if err := applyTags(resolved, req); err != nil {
 		writeJSON(w, http.StatusInternalServerError, WriteTagsResponse{Error: err.Error()})
 		return
 	}

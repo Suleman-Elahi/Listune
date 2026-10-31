@@ -53,6 +53,15 @@ func main() {
 	mux.HandleFunc("GET /api/gdrive/files", handlers.GDriveFilesHandler)
 	mux.HandleFunc("GET /api/gdrive/stream", handlers.GDriveStreamHandler)
 
+	// Soulseek search / downloads (via soulseek-bridge)
+	mux.HandleFunc("GET /api/soulseek/status", handlers.SoulseekStatus)
+	mux.HandleFunc("POST /api/soulseek/login", handlers.SoulseekLogin)
+	mux.HandleFunc("POST /api/soulseek/search", handlers.SoulseekSearch)
+	mux.HandleFunc("POST /api/soulseek/download", handlers.SoulseekDownload)
+	mux.HandleFunc("GET /api/soulseek/jobs", handlers.SoulseekJobs)
+	mux.HandleFunc("GET /api/soulseek/jobs/{id}", handlers.SoulseekJob)
+	mux.HandleFunc("POST /api/soulseek/jobs/{id}/cancel", handlers.SoulseekCancelJob)
+
 	// Wrap with CORS
 	handler := handlers.CORSMiddleware(mux)
 

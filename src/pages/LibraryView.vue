@@ -46,10 +46,85 @@
         <input
           v-model="searchQuery"
           class="search-input"
-          placeholder="Search your library..."
+          placeholder="Search your library... (Enter for Soulseek)"
           @input="onSearch"
+          @keyup.enter="runOnlineSearch"
         />
+        <q-btn
+          flat
+          round
+          dense
+          icon="tune"
+          color="grey-5"
+          size="xs"
+          title="Download options"
+        >
+          <q-popup-proxy transition-show="scale" transition-hide="scale">
+            <div class="ss-popup">
+              <div class="ss-popup-title">Soulseek download options</div>
+              <div class="ss-popup-label">Format</div>
+              <q-btn-toggle
+                v-model="optsDraft.mode"
+                dense
+                no-caps
+                push
+                toggle-color="primary"
+                color="grey-9"
+                text-color="white"
+                :options="[
+                  { label: 'MP3', value: 'mp3' },
+                  { label: 'FLAC', value: 'flac' },
+                ]"
+              />
+              <div class="ss-popup-label">Quality (MP3)</div>
+              <q-select
+                v-model="optsDraft.quality"
+                dark
+                outlined
+                dense
+                emit-value
+                map-options
+                :disable="optsDraft.mode === 'flac'"
+                :options="qualityOptions"
+                style="min-width: 180px;"
+              />
+              <template v-if="!ssStore.status?.loggedIn">
+                <q-separator dark class="q-my-sm" />
+                <div class="ss-popup-label">Soulseek login</div>
+                <q-input v-model="ssAccount" dark outlined dense label="Username" class="q-mb-xs" />
+                <q-input
+                  v-model="ssPassword"
+                  dark
+                  outlined
+                  dense
+                  type="password"
+                  label="Password"
+                  @keyup.enter="doSsLogin"
+                />                <q-btn
+                  flat
+                  dense
+                  no-caps
+                  color="primary"
+                  label="Save account"
+                  :loading="ssLoggingIn"
+                  :disable="!ssAccount.trim() || !ssPassword"
+                  class="q-my-xs"
+                  @click="doSsLogin"
+                />
+                <div v-if="ssStore.loginError" class="text-negative text-xs">{{ ssStore.loginError }}</div>
+              </template>
+              <div v-else class="text-positive text-xs q-mt-sm">
+                <q-icon name="circle" size="8px" class="q-mr-xs" />Connected as {{ ssStore.status?.account }}
+              </div>
+              <div class="row justify-between q-mt-sm items-center">
+                <div v-if="ssStore.statusError" class="text-negative text-xs col ss-popup-error">{{ ssStore.statusError }}</div>
+                <q-btn flat dense no-caps color="grey-4" label="Close" v-close-popup />
+              </div>
+            </div>
+          </q-popup-proxy>
+        </q-btn>
       </div>
+      <div v-if="ssStore.searchError" class="ss-inline-error">{{ ssStore.searchError }}</div>
     </div>
 
     <!-- Filter tabs -->
@@ -97,33 +172,35 @@
     <!-- Track list (All Songs tab) -->
     <div v-if="activeTab === 'All Songs'" class="track-list-wrap">
       <q-virtual-scroll
-        v-if="filteredTracks.length > 0"
-        :items="filteredTracks"
+        v-if="listRows.length > 0"
+        :items="listRows"
         :virtual-scroll-item-size="72"
         style="height: 100%"
         @virtual-scroll="onVirtualScroll"
       >
-        <template #default="{ item: track, index }">
+        <template #default="{ item: row }">
+          <!-- Real track -->
           <div
-            :key="track.id"
+            v-if="row.kind === 'track'"
+            :key="row.track.id"
             class="track-row"
-            :class="{ 'track-row--active': track.id === playerStore.currentTrackId }"
-            @click="playTrack(track.id)"
+            :class="{ 'track-row--active': row.track.id === playerStore.currentTrackId }"
+            @click="playTrack(row.track.id)"
           >
-            <span class="track-num">{{ String(index + 1).padStart(2, '0') }}</span>
+            <span class="track-num">{{ String(row.index + 1).padStart(2, '0') }}</span>
             <div class="track-art">
-              <img v-if="artworkUrls[track.id]" :src="artworkUrls[track.id]" />
+              <img v-if="artworkUrls[row.track.id]" :src="artworkUrls[row.track.id]" />
               <q-icon v-else name="music_note" color="grey-6" size="20px" />
             </div>
             <div class="track-info">
-              <div class="track-title">{{ track.title || 'Unknown' }}</div>
-              <div class="track-artist">{{ track.artist || 'Unknown artist' }}</div>
+              <div class="track-title">{{ row.track.title || 'Unknown' }}</div>
+              <div class="track-artist">{{ row.track.artist || 'Unknown artist' }}</div>
             </div>
-            <span class="track-duration">{{ formatDuration(track.duration) }}</span>
-            <q-btn flat round dense icon="add" color="grey-5" size="xs" @click.stop="showTrackMenu($event, track.id)">
+            <span class="track-duration">{{ formatDuration(row.track.duration) }}</span>
+            <q-btn flat round dense icon="add" color="grey-5" size="xs" @click.stop="showTrackMenu($event, row.track.id)">
               <q-menu anchor="bottom right" self="top right" class="track-menu">
                 <q-list dense dark style="min-width: 180px; background: #1e2230;">
-                  <q-item clickable v-close-popup @click="enqueueTrack(track.id)">
+                  <q-item clickable v-close-popup @click="enqueueTrack(row.track.id)">
                     <q-item-section avatar><q-icon name="queue" size="18px" /></q-item-section>
                     <q-item-section>Add to queue</q-item-section>
                   </q-item>
@@ -134,7 +211,7 @@
                     :key="pl.id"
                     clickable
                     v-close-popup
-                    @click="addToPlaylist(pl.id, track.id)"
+                    @click="addToPlaylist(pl.id, row.track.id)"
                   >
                     <q-item-section avatar><q-icon name="queue_music" size="18px" /></q-item-section>
                     <q-item-section>{{ pl.name }}</q-item-section>
@@ -148,31 +225,99 @@
             <q-btn flat round dense icon="more_vert" color="grey-5" size="xs" @click.stop>
               <q-menu anchor="bottom right" self="top right">
                 <q-list dense dark style="min-width: 200px; background: #1e2230;">
-                  <q-item clickable v-close-popup @click="playNext(track.id)">
+                  <q-item clickable v-close-popup @click="playNext(row.track.id)">
                     <q-item-section avatar><q-icon name="playlist_play" size="18px" color="white" /></q-item-section>
                     <q-item-section style="color: #fff;">Play next</q-item-section>
                   </q-item>
-                  <q-item clickable v-close-popup @click="enqueueTrack(track.id)">
+                  <q-item clickable v-close-popup @click="enqueueTrack(row.track.id)">
                     <q-item-section avatar><q-icon name="queue" size="18px" color="white" /></q-item-section>
                     <q-item-section style="color: #fff;">Add to queue</q-item-section>
                   </q-item>
                   <q-separator dark />
-                  <q-item clickable v-close-popup @click="identifySingle(track)">
+                  <q-item clickable v-close-popup @click="identifySingle(row.track)">
                     <q-item-section avatar><q-icon name="fingerprint" size="18px" color="orange-4" /></q-item-section>
                     <q-item-section style="color: #fff;">Identify track</q-item-section>
                   </q-item>
-                  <q-item clickable v-close-popup @click="showTrackDetails(track)">
+                  <q-item clickable v-close-popup @click="showTrackDetails(row.track)">
                     <q-item-section avatar><q-icon name="info_outline" size="18px" color="light-blue-4" /></q-item-section>
                     <q-item-section style="color: #fff;">Track info</q-item-section>
                   </q-item>
                   <q-separator dark />
-                  <q-item clickable v-close-popup @click="removeTrack(track.id)">
+                  <q-item clickable v-close-popup @click="removeTrack(row.track.id)">
                     <q-item-section avatar><q-icon name="delete_outline" size="18px" color="red-4" /></q-item-section>
                     <q-item-section style="color: #ef4444;">Remove from library</q-item-section>
                   </q-item>
                 </q-list>
               </q-menu>
             </q-btn>
+          </div>
+
+          <!-- Section label -->
+          <div
+            v-else-if="row.kind === 'label'"
+            :key="'label-' + row.label"
+            class="ss-section-label"
+          >
+            {{ row.label }}<template v-if="ssStore.searchQuery && row.label.startsWith('Soulseek')"> · "{{ ssStore.searchQuery }}"</template>
+          </div>
+
+          <!-- Searching row -->
+          <div
+            v-else-if="row.kind === 'searching'"
+            key="ss-searching"
+            class="track-row track-row--ghost"
+          >
+            <q-spinner-dots color="primary" size="22px" class="q-mr-sm" />
+            <div class="track-info">
+              <div class="track-title">Searching Soulseek…</div>
+              <div class="track-artist">waiting for peer responses</div>
+            </div>
+          </div>
+
+          <!-- Soulseek result placeholder (faded, not clickable) -->
+          <div
+            v-else
+            :key="row.ghost.key"
+            class="track-row track-row--ghost"
+          >
+            <span class="track-num">--</span>
+            <div class="track-art track-art--ghost">
+              <q-icon name="cloud_download" color="grey-6" size="18px" />
+            </div>
+            <div class="track-info">
+              <div class="track-title">{{ row.ghost.title }}</div>
+              <div class="track-artist">
+                {{ row.ghost.artist }}
+                <template v-if="row.ghost.bitrate"> · {{ row.ghost.bitrate }}kbps</template>
+                <template v-if="row.ghost.sizeMb"> · {{ row.ghost.sizeMb }}</template>
+              </div>
+              <q-linear-progress
+                v-if="row.ghost.status === 'downloading'"
+                indeterminate
+                color="light-green-6"
+                track-color="grey-9"
+                class="ss-ghost-progress"
+              />
+            </div>
+            <span class="ss-ghost-status" :class="`ss-ghost-status--${row.ghost.status}`">
+              <template v-if="row.ghost.status === 'downloading'">downloading</template>
+              <template v-else-if="row.ghost.status === 'failed'">
+                failed
+                <q-tooltip>{{ row.ghost.error || 'download failed' }}</q-tooltip>
+              </template>
+              <template v-else>found</template>
+            </span>
+            <q-btn
+              v-if="row.ghost.status !== 'downloading'"
+              flat
+              round
+              dense
+              size="xs"
+              :icon="row.ghost.status === 'failed' ? 'refresh' : 'download'"
+              :color="row.ghost.status === 'failed' ? 'negative' : 'grey-5'"
+              :title="row.ghost.status === 'failed' ? 'Retry download' : 'Download'"
+              @click.stop="downloadGhost(row.ghost)"
+            />
           </div>
         </template>
       </q-virtual-scroll>
@@ -355,6 +500,7 @@ import { useRouter } from 'vue-router';
 import { useQuasar } from 'quasar';
 import { useLibraryStore } from 'src/stores/libraryStore';
 import { usePlayerStore } from 'src/stores/playerStore';
+import { useSoulseekStore, type SoulseekGhost, type SoulseekOpts } from 'src/stores/soulseekStore';
 import { db } from 'src/services/db';
 import AddSourceDialog from 'src/components/AddSourceDialog.vue';
 import BottomNav from 'src/components/BottomNav.vue';
@@ -366,6 +512,7 @@ const router = useRouter();
 const $q = useQuasar();
 const libraryStore = useLibraryStore();
 const playerStore = usePlayerStore();
+const ssStore = useSoulseekStore();
 
 // User session
 interface UserInfo { email: string; name: string; picture?: string; token: string; }
@@ -430,6 +577,89 @@ const scanRatio = computed(() => {
 const scanUnknownTotal = computed(() => (libraryStore.scanProgress?.total ?? 0) === 0);
 
 const filteredTracks = computed<Track[]>(() => libraryStore.results);
+
+// ── Soulseek integration (search directly from this view) ──
+
+interface ListRow {
+  kind: 'track' | 'label' | 'searching' | 'ghost';
+  track?: Track;
+  index?: number;
+  label?: string;
+  ghost?: SoulseekGhost;
+}
+
+const listRows = computed<ListRow[]>(() => {
+  const rows: ListRow[] = filteredTracks.value.map((track, index) => ({
+    kind: 'track',
+    track,
+    index,
+  }));
+  // Library matches first, Soulseek results after — only while a query is typed.
+  if (!searchQuery.value.trim() || (!ssStore.hasResults && !ssStore.searching)) return rows;
+
+  rows.push({ kind: 'label', label: 'Soulseek results' });
+  if (ssStore.searching) {
+    rows.push({ kind: 'searching' });
+  }
+  for (const ghost of ssStore.ghosts) {
+    rows.push({ kind: 'ghost', ghost });
+  }
+  return rows;
+});
+
+const qualityOptions = [
+  { label: 'Any', value: '' },
+  { label: '128 kbps', value: '128' },
+  { label: '192 kbps', value: '192' },
+  { label: '256 kbps', value: '256' },
+  { label: '320 kbps', value: '320' },
+];
+
+/** Draft of the persisted Soulseek options, edited in the popup. */
+const optsDraft = ref<SoulseekOpts>({ ...ssStore.opts });
+watch(() => ssStore.opts, (next) => { optsDraft.value = { ...next }; }, { immediate: true });
+watch(optsDraft, (next) => { ssStore.saveOpts(next); }, { deep: true });
+
+const ssAccount = ref('');
+const ssPassword = ref('');
+const ssLoggingIn = ref(false);
+
+function runOnlineSearch(): void {
+  const q = searchQuery.value.trim();
+  if (!q) {
+    notifyError('Type something to search Soulseek');
+    return;
+  }
+  if (!ssStore.status?.loggedIn) void ssStore.loadStatus();
+  void ssStore.runSearch(q).then(() => {
+    if (ssStore.searchError) {
+      notifyError(ssStore.searchError);
+    } else if (ssStore.hasResults) {
+      notifySuccess(`Found ${ssStore.ghosts.length} file(s) on Soulseek`);
+    }
+  });
+}
+
+function downloadGhost(ghost: SoulseekGhost): void {
+  void ssStore.downloadFile({ resultIndex: ghost.resultIndex, fileIndex: ghost.fileIndex }).then(() => {
+    if (ssStore.downloadError) notifyError(ssStore.downloadError);
+  });
+}
+
+async function doSsLogin(): Promise<void> {
+  ssLoggingIn.value = true;
+  try {
+    const ok = await ssStore.login(ssAccount.value.trim(), ssPassword.value);
+    if (ok) {
+      ssPassword.value = '';
+      notifySuccess(`Soulseek: logged in as ${ssAccount.value.trim()}`);
+    } else {
+      notifyError(ssStore.loginError);
+    }
+  } finally {
+    ssLoggingIn.value = false;
+  }
+}
 
 // ── Artist & Album grouping ──
 interface ArtistGroup { name: string; trackCount: number; artworkId: string | null; }
@@ -762,6 +992,8 @@ function onVirtualScroll({ to }: { to: number }) {
 
 watch(() => libraryStore.results, (results) => {
   results.slice(0, 20).forEach((t) => { if (t.artworkId) loadArtwork(t.id); });
+  // Keep the ghost list in sync with what is already downloadable.
+  void ssStore.refreshLibraryTitles();
 }, { immediate: true });
 
 watch(() => libraryStore.isScanning, (scanning) => {
@@ -813,7 +1045,15 @@ async function identifyUntagged(): Promise<void> {
   }
 }
 
-onMounted(() => { libraryStore.search(''); });
+onMounted(() => {
+  void libraryStore.search('');
+  // Pull in everything from the server library folder (LIBRARY_PATH).
+  void libraryStore.syncServerLibrary();
+  // Soulseek status + any running download jobs.
+  void ssStore.loadStatus();
+  void ssStore.refreshJobs();
+  void ssStore.refreshLibraryTitles();
+});
 </script>
 
 <style scoped lang="scss">
@@ -1050,6 +1290,88 @@ onMounted(() => { libraryStore.search(''); });
   flex-shrink: 0;
   min-width: 32px;
   text-align: right;
+}
+
+/* ── Soulseek search options popup ── */
+.ss-popup {
+  background: #1e2230;
+  color: #fff;
+  padding: 14px;
+  border-radius: 12px;
+  min-width: 260px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ss-popup-title {
+  font-size: 14px;
+  font-weight: 700;
+  margin-bottom: 2px;
+}
+
+.ss-popup-label {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.5);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.ss-popup-error {
+  max-width: 150px;
+  overflow-wrap: anywhere;
+}
+
+.ss-inline-error {
+  font-size: 12px;
+  color: #f87171;
+  padding: 6px 14px 0;
+}
+
+/* ── Soulseek ghost rows (faded placeholders) ── */
+.ss-section-label {
+  padding: 12px 16px 4px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #4ade80;
+  font-weight: 700;
+}
+
+.track-row--ghost {
+  opacity: 0.55;
+  cursor: default;
+
+  &:hover {
+    background: transparent;
+  }
+}
+
+.track-art--ghost {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px dashed rgba(255, 255, 255, 0.12);
+  box-sizing: border-box;
+}
+
+.ss-ghost-progress {
+  margin-top: 4px;
+  max-width: 320px;
+}
+
+.ss-ghost-status {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.4);
+  flex-shrink: 0;
+  min-width: 68px;
+  text-align: right;
+}
+
+.ss-ghost-status--downloading {
+  color: #a3e635;
+}
+
+.ss-ghost-status--failed {
+  color: #f87171;
 }
 
 /* ── Empty state ── */

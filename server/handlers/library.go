@@ -3,9 +3,7 @@ package handlers
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -18,6 +16,40 @@ var audioExtensions = map[string]bool{
 	".mp3": true, ".flac": true, ".ogg": true,
 	".m4a": true, ".wav": true, ".aac": true,
 	".wma": true, ".opus": true,
+}
+
+// LibraryRoot returns the absolute path of the local library folder
+// configured via LIBRARY_PATH (default ./data/library). The folder is
+// created when missing. All scans, streaming, artwork and tag writes are
+// confined to this folder.
+func LibraryRoot() string {
+	root := os.Getenv("LIBRARY_PATH")
+	if root == "" {
+		root = filepath.Join("data", "library")
+	}
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		return root
+	}
+	_ = os.MkdirAll(abs, 0o755)
+	return abs
+}
+
+// resolveLibraryPath maps a client-supplied path (relative to the library
+// root, or absolute inside it) to a clean absolute path inside the library
+// root. Paths that escape the root are rejected.
+func resolveLibraryPath(p string) (string, error) {
+	root := LibraryRoot()
+	var abs string
+	if filepath.IsAbs(p) {
+		abs = filepath.Clean(p)
+	} else {
+		abs = filepath.Clean(filepath.Join(root, p))
+	}
+	if abs != root && !strings.HasPrefix(abs, root+string(filepath.Separator)) {
+		return "", fmt.Errorf("path outside library")
+	}
+	return abs, nil
 }
 
 // TrackMeta is the metadata returned for each scanned track.
@@ -33,11 +65,6 @@ type TrackMeta struct {
 	ServerPath string  `json:"serverPath"`
 }
 
-// ScanRequest is the body for POST /api/library/scan.
-type ScanRequest struct {
-	FolderPath string `json:"folderPath"`
-}
-
 // ScanResponse contains the list of discovered tracks.
 type ScanResponse struct {
 	Tracks []TrackMeta `json:"tracks"`
@@ -46,35 +73,26 @@ type ScanResponse struct {
 	Error  string      `json:"error,omitempty"`
 }
 
-// ScanFolder scans a server-side directory for audio files and returns metadata.
+// ScanFolder scans the configured library folder (including subfolders)
+// for audio files and returns metadata. ServerPath values are relative to
+// the library root.
 func ScanFolder(w http.ResponseWriter, r *http.Request) {
-	var req ScanRequest
-	body, _ := io.ReadAll(r.Body)
-	if err := json.Unmarshal(body, &req); err != nil {
-		writeJSON(w, http.StatusBadRequest, ScanResponse{Error: "invalid request body"})
-		return
-	}
+	root := LibraryRoot()
 
-	if req.FolderPath == "" {
-		writeJSON(w, http.StatusBadRequest, ScanResponse{Error: "folderPath is required"})
-		return
-	}
-
-	// Validate path exists and is a directory
-	info, err := os.Stat(req.FolderPath)
+	info, err := os.Stat(root)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, ScanResponse{Error: "path not found: " + err.Error()})
+		writeJSON(w, http.StatusInternalServerError, ScanResponse{Error: "library folder not available: " + err.Error()})
 		return
 	}
 	if !info.IsDir() {
-		writeJSON(w, http.StatusBadRequest, ScanResponse{Error: "path is not a directory"})
+		writeJSON(w, http.StatusInternalServerError, ScanResponse{Error: "library path is not a directory"})
 		return
 	}
 
 	tracks := make([]TrackMeta, 0, 100)
 	errors := 0
 
-	filepath.Walk(req.FolderPath, func(path string, info os.FileInfo, err error) error {
+	filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			errors++
 			return nil
@@ -88,7 +106,13 @@ func ScanFolder(w http.ResponseWriter, r *http.Request) {
 			return nil
 		}
 
-		track := parseTrackFile(path)
+		rel, relErr := filepath.Rel(root, path)
+		if relErr != nil {
+			errors++
+			return nil
+		}
+
+		track := parseTrackFile(path, filepath.ToSlash(rel))
 		tracks = append(tracks, track)
 		return nil
 	})
@@ -100,18 +124,18 @@ func ScanFolder(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func parseTrackFile(path string) TrackMeta {
-	// Generate a stable ID from the file path
-	hash := sha256.Sum256([]byte(path))
+func parseTrackFile(absPath, relPath string) TrackMeta {
+	// Stable ID from the path relative to the library root
+	hash := sha256.Sum256([]byte(relPath))
 	id := hex.EncodeToString(hash[:16])
 
 	track := TrackMeta{
 		ID:         id,
-		ServerPath: path,
-		Title:      filenameWithoutExt(path),
+		ServerPath: relPath,
+		Title:      filenameWithoutExt(absPath),
 	}
 
-	f, err := os.Open(path)
+	f, err := os.Open(absPath)
 	if err != nil {
 		return track
 	}
@@ -143,8 +167,8 @@ func filenameWithoutExt(path string) string {
 	return base
 }
 
-// StreamFile serves an audio file by its server path.
-// GET /api/stream?path=/path/to/file.mp3
+// StreamFile serves an audio file from the library folder.
+// GET /api/stream?path=relative/or/absolute/path.mp3
 func StreamFile(w http.ResponseWriter, r *http.Request) {
 	filePath := r.URL.Query().Get("path")
 	if filePath == "" {
@@ -152,15 +176,21 @@ func StreamFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	resolved, err := resolveLibraryPath(filePath)
+	if err != nil {
+		http.Error(w, "path outside library", http.StatusForbidden)
+		return
+	}
+
 	// Security: only serve audio files
-	ext := strings.ToLower(filepath.Ext(filePath))
+	ext := strings.ToLower(filepath.Ext(resolved))
 	if !audioExtensions[ext] {
 		http.Error(w, "not an audio file", http.StatusForbidden)
 		return
 	}
 
 	// Check file exists
-	if _, err := os.Stat(filePath); err != nil {
+	if _, err := os.Stat(resolved); err != nil {
 		http.Error(w, "file not found", http.StatusNotFound)
 		return
 	}
@@ -183,11 +213,11 @@ func StreamFile(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Accept-Ranges", "bytes")
 
-	http.ServeFile(w, r, filePath)
+	http.ServeFile(w, r, resolved)
 }
 
-// GetArtwork serves the embedded artwork from an audio file.
-// GET /api/artwork?path=/path/to/file.mp3
+// GetArtwork serves the embedded artwork from an audio file in the library.
+// GET /api/artwork?path=relative/or/absolute/path.mp3
 func GetArtwork(w http.ResponseWriter, r *http.Request) {
 	filePath := r.URL.Query().Get("path")
 	if filePath == "" {
@@ -195,7 +225,13 @@ func GetArtwork(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	f, err := os.Open(filePath)
+	resolved, err := resolveLibraryPath(filePath)
+	if err != nil {
+		http.Error(w, "path outside library", http.StatusForbidden)
+		return
+	}
+
+	f, err := os.Open(resolved)
 	if err != nil {
 		http.Error(w, "file not found", http.StatusNotFound)
 		return

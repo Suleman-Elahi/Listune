@@ -61,35 +61,12 @@
 
       <q-card-section>
         <q-tabs v-model="sourceType" dense align="justify" active-color="white" indicator-color="white">
-          <q-tab name="server" label="Server Folder" icon="dns" />
           <q-tab name="local" label="Local Folder" icon="folder" />
           <q-tab name="s3" label="S3 / Cloud" icon="cloud" />
           <q-tab name="gdrive" label="Google Drive" icon="cloud_queue" />
         </q-tabs>
 
         <q-tab-panels v-model="sourceType" animated style="background: transparent">
-          <!-- Server folder -->
-          <q-tab-panel name="server" class="q-pa-none q-pt-md">
-            <p class="text-grey-4 text-sm">
-              Enter the absolute path to a folder on the server. The backend will scan it for audio files.
-            </p>
-            <q-input
-              v-model="serverFolder"
-              dark
-              outlined
-              dense
-              label="Server folder path"
-              placeholder="/home/user/Music"
-              class="q-mb-sm"
-            />
-            <div v-if="serverScanError" class="text-negative q-mt-xs" style="font-size: 12px;">
-              {{ serverScanError }}
-            </div>
-            <div v-if="serverScanning" class="q-mt-sm text-grey-4" style="font-size: 13px;">
-              <q-spinner size="14px" class="q-mr-xs" /> Scanning...
-            </div>
-          </q-tab-panel>
-
           <!-- Local folder -->
           <q-tab-panel name="local" class="q-pa-none q-pt-md">
             <p class="text-grey-4 text-sm">
@@ -185,7 +162,6 @@
           label="Scan"
           color="primary"
           :disable="!canScan"
-          :loading="serverScanning"
           @click="startScan"
         />
       </q-card-actions>
@@ -298,7 +274,7 @@ import { usePlayerStore } from 'src/stores/playerStore';
 import { db } from 'src/services/db';
 import { backend, isAuthError } from 'src/services/backend';
 import { s3SourceId } from 'src/services/sigv4';
-import type { S3Config, LocalSource, SourceRecord, Track } from 'src/types/models';
+import type { S3Config, LocalSource, SourceRecord } from 'src/types/models';
 
 const open = defineModel<boolean>({ default: false });
 
@@ -306,13 +282,8 @@ const $q = useQuasar();
 const libraryStore = useLibraryStore();
 const playerStore = usePlayerStore();
 const savedSources = ref<SourceRecord[]>([]);
-const sourceType = ref<'server' | 'local' | 's3' | 'gdrive'>('server');
+const sourceType = ref<'local' | 's3' | 'gdrive'>('local');
 const showSecret = ref(false);
-
-// Server folder
-const serverFolder = ref('');
-const serverScanning = ref(false);
-const serverScanError = ref('');
 
 // Local
 const localHandle = ref<FileSystemDirectoryHandle | null>(null);
@@ -491,7 +462,6 @@ function removeSource(source: SourceRecord): void {
 }
 
 const canScan = computed(() => {
-  if (sourceType.value === 'server') return serverFolder.value.trim().length > 0;
   if (sourceType.value === 'local') return !!localHandle.value;
   if (sourceType.value === 'gdrive') return !!googleToken.value && !!gdriveFolderId.value;
   const f = s3Form.value;
@@ -499,9 +469,7 @@ const canScan = computed(() => {
 });
 
 async function startScan() {
-  if (sourceType.value === 'server') {
-    await scanServerFolder();
-  } else if (sourceType.value === 'local' && localHandle.value) {
+  if (sourceType.value === 'local' && localHandle.value) {
     const source: LocalSource = { handle: localHandle.value };
     const sourceName = localHandle.value.name;
     await db.putSource(sourceName, {
@@ -537,45 +505,6 @@ async function startScan() {
     await loadSources();
     libraryStore.startScan(cfg, sourceName);
     open.value = false;
-  }
-}
-
-async function scanServerFolder() {
-  serverScanError.value = '';
-  serverScanning.value = true;
-
-  try {
-    const result = await backend.scanServerFolder(serverFolder.value.trim());
-
-    if (result.error) {
-      serverScanError.value = result.error;
-      serverScanning.value = false;
-      return;
-    }
-
-    // Convert server tracks to our Track format and store in IndexedDB
-    const tracks: Track[] = result.tracks.map((t) => ({
-      id: t.id,
-      title: t.title,
-      artist: t.artist || '',
-      album: t.album || '',
-      duration: t.duration || 0,
-      sourceTag: 'server' as const,
-      artworkId: t.hasArtwork ? t.id : null,
-      serverPath: t.serverPath,
-    }));
-
-    // Batch insert into IndexedDB
-    await db.putTracks(tracks);
-
-    // Refresh library
-    await libraryStore.search('');
-
-    serverScanning.value = false;
-    open.value = false;
-  } catch {
-    serverScanError.value = 'Failed to connect to backend';
-    serverScanning.value = false;
   }
 }
 </script>

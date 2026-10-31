@@ -68,12 +68,11 @@ export const backend = {
     window.location.href = `${BASE_URL}/auth/google`;
   },
 
-  /** Scan a server-side folder for audio files. */
-  async scanServerFolder(folderPath: string): Promise<ScanResult> {
+  /** Scan the server-side library folder (LIBRARY_PATH) for audio files. */
+  async scanServerLibrary(): Promise<ScanResult> {
     const res = await fetch(`${BASE_URL}/api/library/scan`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ folderPath }),
     });
     return res.json() as Promise<ScanResult>;
   },

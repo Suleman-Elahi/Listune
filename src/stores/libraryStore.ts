@@ -2,6 +2,7 @@ import { defineStore } from 'pinia';
 import { ref, toRaw } from 'vue';
 import type { Track, ScanProgress, S3Config, LocalSource } from 'src/types/models';
 import { db } from 'src/services/db';
+import { backend } from 'src/services/backend';
 
 export const useLibraryStore = defineStore('library', () => {
   const searchQuery = ref('');
@@ -23,6 +24,42 @@ export const useLibraryStore = defineStore('library', () => {
       offset,
     });
     results.value = [...results.value, ...more];
+  }
+
+  /**
+   * Sync tracks from the server library folder (LIBRARY_PATH on the backend).
+   * Upserts every scanned song and drops server tracks that no longer exist
+   * on disk. Subfolders are included by the backend scan; all songs show up
+   * flat in the library.
+   */
+  async function syncServerLibrary(): Promise<void> {
+    try {
+      const result = await backend.scanServerLibrary();
+      if (result.error) return;
+
+      const tracks: Track[] = result.tracks.map((t) => ({
+        id: t.id,
+        title: t.title,
+        artist: t.artist || '',
+        album: t.album || '',
+        duration: t.duration || 0,
+        sourceTag: 'server' as const,
+        artworkId: t.hasArtwork ? t.id : null,
+        serverPath: t.serverPath,
+      }));
+
+      const keep = new Set(tracks.map((t) => t.id));
+      const existing = await db.queryTracks({});
+      await db.putTracks(tracks);
+      for (const t of existing) {
+        if (t.sourceTag === 'server' && !keep.has(t.id)) {
+          await db.deleteTrack(t.id);
+        }
+      }
+      await search(searchQuery.value);
+    } catch {
+      // Backend unreachable: leave the current library untouched.
+    }
   }
 
   function startScan(source: S3Config | LocalSource | { folderId: string; folderName?: string; token: string }, sourceName?: string): void {
@@ -76,6 +113,7 @@ export const useLibraryStore = defineStore('library', () => {
     scanError,
     search,
     loadMore,
+    syncServerLibrary,
     startScan,
   };
 });

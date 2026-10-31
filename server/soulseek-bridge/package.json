@@ -1,0 +1,11 @@
+{
+  "name": "listune-soulseek-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "NDJSON bridge between the Listune backend and the Soulseek network (slsk-client)",
+  "dependencies": {
+    "keytar": "^7.9.0",
+    "slsk-client": "^1.1.0"
+  }
+}

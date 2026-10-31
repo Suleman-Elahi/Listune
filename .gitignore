@@ -42,3 +42,11 @@ coverage/
 # Lock files (using pnpm)
 package-lock.json
 yarn.lock
+
+# Local library / downloaded audio (never commit)
+server/data/library/
+*.mp3
+*.flac
+*.m4a
+*.ogg
+*.wav

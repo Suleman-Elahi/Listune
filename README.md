@@ -2,7 +2,7 @@
 
 ![Screenshot](screen.png)
 
-A dark-themed, mobile-first music player PWA built with Vue 3, Quasar, and TypeScript. Plays local files, S3 buckets, and Google Drive audio, searches and downloads from Soulseek, with a real-time visualizer, playlists, audio fingerprinting, and music tagging.
+A dark-themed, mobile-first music player PWA built with Vue 3, Quasar, and TypeScript. Plays local files, S3 buckets, and Google Drive audio, searches and downloads from Soulseek and YouTube, with a real-time visualizer, playlists, audio fingerprinting, and music tagging.
 
 ## Features
 
@@ -32,6 +32,12 @@ A dark-themed, mobile-first music player PWA built with Vue 3, Quasar, and TypeS
 - MP3/FLAC and bitrate filters, persisted in the search options popup
 - Faded placeholder rows show download progress; tracks appear in the library when finished
 - Credentials stored in the system keychain, or via `SOULSEEK_ACCOUNT` / `SOULSEEK_PASSWORD`
+
+### YouTube
+- Search YouTube videos from the same library search bar (press Enter) — Soulseek and YouTube results are shown together
+- Uses the signed-in Google account's `youtube.readonly` scope via the YouTube Data API (no separate API key)
+- Download results as MP3s with `go-ytdlp`; files land in the server library and appear automatically once scanned
+- Thumbnails and channel names shown on result rows, with per-file download progress
 
 ### Audio Fingerprinting & Tagging (AcoustID + MusicBrainz)
 - Automatically identifies untagged tracks via audio fingerprinting
@@ -86,6 +92,7 @@ A dark-themed, mobile-first music player PWA built with Vue 3, Quasar, and TypeS
 ### Authentication
 - Google SSO login (OAuth 2.0 via backend)
 - Google Drive access via `drive.readonly` scope
+- YouTube search via `youtube.readonly` scope (re-consent required once after upgrading)
 - User avatar and logout in the library header
 - Route guard redirects unauthenticated users to login
 
@@ -109,21 +116,22 @@ A dark-themed, mobile-first music player PWA built with Vue 3, Quasar, and TypeS
 - File System Access API for local folder scanning
 - AWS SigV4 for S3 pre-signed URL generation (no SDK dependency)
 - Node bridge (`slsk-client`) for Soulseek search/downloads
-- Go backend for OAuth, Google Drive, AcoustID fingerprinting, MusicBrainz lookups, and tag writing
+- Go backend for OAuth, Google Drive, YouTube Data API search, go-ytdlp MP3 downloads, AcoustID fingerprinting, MusicBrainz lookups, and tag writing
 
 ## Prerequisites
 
 - Node.js 22+ (Node 24+ recommended for the Soulseek bridge)
-- Go 1.22+ (for the backend server)
+- Go 1.23+ (for the backend server)
 - `fpcalc` (Chromaprint) — required for audio fingerprinting
+- `ffmpeg` — required for YouTube MP3 conversion (yt-dlp is resolved or installed automatically by go-ytdlp, or set `YTDLP_BINARY`)
 - `libsecret` / GNOME Keyring — required for Soulseek on Linux (optional when using env-var credentials)
 
 ```bash
 # Ubuntu/Debian
-sudo apt install libchromaprint-tools libsecret-1-dev
+sudo apt install libchromaprint-tools libsecret-1-dev ffmpeg
 
 # macOS
-brew install chromaprint
+brew install chromaprint ffmpeg
 ```
 
 ## Getting Started
@@ -141,6 +149,7 @@ quasar dev
 cd server
 cp .env.example .env
 # Set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, ACOUSTID_API_KEY
+# Enable "YouTube Data API v3" in the same Google Cloud project.
 go run .
 ```
 

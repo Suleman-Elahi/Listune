@@ -62,6 +62,14 @@ func main() {
 	mux.HandleFunc("GET /api/soulseek/jobs/{id}", handlers.SoulseekJob)
 	mux.HandleFunc("POST /api/soulseek/jobs/{id}/cancel", handlers.SoulseekCancelJob)
 
+	// YouTube search / MP3 downloads (via go-ytdlp)
+	mux.HandleFunc("GET /api/youtube/status", handlers.YouTubeStatus)
+	mux.HandleFunc("POST /api/youtube/search", handlers.YouTubeSearch)
+	mux.HandleFunc("POST /api/youtube/download", handlers.YouTubeDownload)
+	mux.HandleFunc("GET /api/youtube/jobs", handlers.YouTubeJobs)
+	mux.HandleFunc("GET /api/youtube/jobs/{id}", handlers.YouTubeJob)
+	mux.HandleFunc("POST /api/youtube/jobs/{id}/cancel", handlers.YouTubeCancelJob)
+
 	// Wrap with CORS
 	handler := handlers.CORSMiddleware(mux)
 

@@ -19,6 +19,7 @@ RUN apt-get update \
       ca-certificates \
       libchromaprint-tools \
       libsecret-1-0 \
+      ffmpeg \
       nginx-light \
  && rm -rf /var/lib/apt/lists/* /var/www/html
 

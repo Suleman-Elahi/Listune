@@ -46,7 +46,7 @@
         <input
           v-model="searchQuery"
           class="search-input"
-          placeholder="Search your library... (Enter for Soulseek)"
+          placeholder="Search your library... (Enter for Soulseek + YouTube)"
           @input="onSearch"
           @keyup.enter="runOnlineSearch"
         />
@@ -123,6 +123,7 @@
         </q-btn>
       </div>
       <div v-if="ssStore.searchError" class="ss-inline-error">{{ ssStore.searchError }}</div>
+      <div v-if="ytStore.searchError" class="ss-inline-error ss-inline-error--yt">{{ ytStore.searchError }}</div>
     </div>
 
     <!-- Filter tabs -->
@@ -256,20 +257,69 @@
             :key="'label-' + row.label"
             class="ss-section-label"
           >
-            {{ row.label }}<template v-if="ssStore.searchQuery && row.label.startsWith('Soulseek')"> · "{{ ssStore.searchQuery }}"</template>
+            {{ row.label }}<template v-if="row.label.endsWith(' results')"> · "{{ searchQuery.trim() }}"</template>
           </div>
 
           <!-- Searching row -->
           <div
             v-else-if="row.kind === 'searching'"
-            key="ss-searching"
+            :key="'searching-' + row.searchingLabel"
             class="track-row track-row--ghost"
           >
             <q-spinner-dots color="primary" size="22px" class="q-mr-sm" />
             <div class="track-info">
-              <div class="track-title">Searching Soulseek…</div>
-              <div class="track-artist">waiting for peer responses</div>
+              <div class="track-title">Searching {{ row.searchingLabel || 'Soulseek' }}…</div>
+              <div class="track-artist">{{ row.searchingLabel === 'YouTube' ? 'querying the YouTube Data API' : 'waiting for peer responses' }}</div>
             </div>
+          </div>
+
+          <!-- YouTube result placeholder (faded, not clickable) -->
+          <div
+            v-else-if="row.kind === 'youtube-ghost' && row.youtubeGhost"
+            :key="row.youtubeGhost.key"
+            class="track-row track-row--ghost"
+          >
+            <span class="track-num">--</span>
+            <div class="track-art track-art--ghost">
+              <img
+                v-if="row.youtubeGhost.thumbnailUrl"
+                :src="row.youtubeGhost.thumbnailUrl"
+                class="yt-thumb"
+                referrerpolicy="no-referrer"
+                loading="lazy"
+              />
+              <q-icon v-else name="smart_display" color="grey-6" size="18px" />
+            </div>
+            <div class="track-info">
+              <div class="track-title">{{ row.youtubeGhost.title }}</div>
+              <div class="track-artist">YouTube · {{ row.youtubeGhost.artist }}</div>
+              <q-linear-progress
+                v-if="row.youtubeGhost.status === 'downloading'"
+                :value="row.youtubeGhost.progress / 100"
+                color="red-5"
+                track-color="grey-9"
+                class="ss-ghost-progress"
+              />
+            </div>
+            <span class="ss-ghost-status" :class="`ss-ghost-status--${row.youtubeGhost.status}`">
+              <template v-if="row.youtubeGhost.status === 'downloading'">{{ row.youtubeGhost.progress }}%</template>
+              <template v-else-if="row.youtubeGhost.status === 'failed'">
+                failed
+                <q-tooltip>{{ row.youtubeGhost.error || 'download failed' }}</q-tooltip>
+              </template>
+              <template v-else>found</template>
+            </span>
+            <q-btn
+              v-if="row.youtubeGhost.status !== 'downloading'"
+              flat
+              round
+              dense
+              size="xs"
+              :icon="row.youtubeGhost.status === 'failed' ? 'refresh' : 'download'"
+              :color="row.youtubeGhost.status === 'failed' ? 'negative' : 'grey-5'"
+              :title="row.youtubeGhost.status === 'failed' ? 'Retry download' : 'Download MP3'"
+              @click.stop="downloadYouTubeGhost(row.youtubeGhost)"
+            />
           </div>
 
           <!-- Soulseek result placeholder (faded, not clickable) -->
@@ -499,6 +549,7 @@ import { useQuasar } from 'quasar';
 import { useLibraryStore } from 'src/stores/libraryStore';
 import { usePlayerStore } from 'src/stores/playerStore';
 import { useSoulseekStore, type SoulseekGhost, type SoulseekOpts } from 'src/stores/soulseekStore';
+import { useYouTubeStore, type YouTubeGhost } from 'src/stores/youtubeStore';
 import { db } from 'src/services/db';
 import AddSourceDialog from 'src/components/AddSourceDialog.vue';
 import BottomNav from 'src/components/BottomNav.vue';
@@ -511,6 +562,7 @@ const $q = useQuasar();
 const libraryStore = useLibraryStore();
 const playerStore = usePlayerStore();
 const ssStore = useSoulseekStore();
+const ytStore = useYouTubeStore();
 
 // User session
 interface UserInfo { email: string; name: string; picture?: string; token: string; }
@@ -576,14 +628,16 @@ const scanUnknownTotal = computed(() => (libraryStore.scanProgress?.total ?? 0) 
 
 const filteredTracks = computed<Track[]>(() => libraryStore.results);
 
-// ── Soulseek integration (search directly from this view) ──
+// ── Online search integration (Soulseek + YouTube) ──
 
 interface ListRow {
-  kind: 'track' | 'label' | 'searching' | 'ghost';
+  kind: 'track' | 'label' | 'searching' | 'ghost' | 'youtube-ghost';
   track?: Track;
   index?: number;
   label?: string;
+  searchingLabel?: string;
   ghost?: SoulseekGhost;
+  youtubeGhost?: YouTubeGhost;
 }
 
 const listRows = computed<ListRow[]>(() => {
@@ -592,15 +646,32 @@ const listRows = computed<ListRow[]>(() => {
     track,
     index,
   }));
-  // Library matches first, Soulseek results after — only while a query is typed.
-  if (!searchQuery.value.trim() || (!ssStore.hasResults && !ssStore.searching)) return rows;
-
-  rows.push({ kind: 'label', label: 'Soulseek results' });
-  if (ssStore.searching) {
-    rows.push({ kind: 'searching' });
+  // Library matches first, online results after — only while a query is typed.
+  if (
+    !searchQuery.value.trim() ||
+    (!ssStore.hasResults && !ssStore.searching && !ytStore.hasResults && !ytStore.searching)
+  ) {
+    return rows;
   }
-  for (const ghost of ssStore.ghosts) {
-    rows.push({ kind: 'ghost', ghost });
+
+  if (ssStore.hasResults || ssStore.searching) {
+    rows.push({ kind: 'label', label: 'Soulseek results' });
+    if (ssStore.searching) {
+      rows.push({ kind: 'searching', searchingLabel: 'Soulseek' });
+    }
+    for (const ghost of ssStore.ghosts) {
+      rows.push({ kind: 'ghost', ghost });
+    }
+  }
+
+  if (ytStore.hasResults || ytStore.searching) {
+    rows.push({ kind: 'label', label: 'YouTube results' });
+    if (ytStore.searching) {
+      rows.push({ kind: 'searching', searchingLabel: 'YouTube' });
+    }
+    for (const ghost of ytStore.ghosts) {
+      rows.push({ kind: 'youtube-ghost', youtubeGhost: ghost });
+    }
   }
   return rows;
 });
@@ -645,15 +716,21 @@ watch(
 function runOnlineSearch(): void {
   const q = searchQuery.value.trim();
   if (!q) {
-    notifyError('Type something to search Soulseek');
+    notifyError('Type something to search Soulseek or YouTube');
     return;
   }
   if (!ssStore.status?.loggedIn) void ssStore.loadStatus();
-  void ssStore.runSearch(q).then(() => {
+  void ytStore.loadStatus();
+  void Promise.all([ssStore.runSearch(q), ytStore.runSearch(q)]).then(() => {
     if (ssStore.searchError) {
       notifyError(ssStore.searchError);
     } else if (ssStore.hasResults) {
       notifySuccess(`Found ${ssStore.ghosts.length} file(s) on Soulseek`);
+    }
+    if (ytStore.searchError) {
+      notifyError(ytStore.searchError);
+    } else if (ytStore.hasResults) {
+      notifySuccess(`Found ${ytStore.ghosts.length} video(s) on YouTube`);
     }
   });
 }
@@ -661,6 +738,12 @@ function runOnlineSearch(): void {
 function downloadGhost(ghost: SoulseekGhost): void {
   void ssStore.downloadFile({ resultIndex: ghost.resultIndex, fileIndex: ghost.fileIndex }).then(() => {
     if (ssStore.downloadError) notifyError(ssStore.downloadError);
+  });
+}
+
+function downloadYouTubeGhost(ghost: YouTubeGhost): void {
+  void ytStore.download(ghost).then(() => {
+    if (ytStore.downloadError) notifyError(ytStore.downloadError);
   });
 }
 
@@ -1010,8 +1093,9 @@ function onVirtualScroll({ to }: { to: number }) {
 
 watch(() => libraryStore.results, (results) => {
   results.slice(0, 20).forEach((t) => { if (t.artworkId) loadArtwork(t.id); });
-  // Keep the ghost list in sync with what is already downloadable.
+  // Keep the ghost lists in sync with what is already downloadable.
   void ssStore.refreshLibraryTitles();
+  void ytStore.refreshLibraryTitles();
 }, { immediate: true });
 
 watch(() => libraryStore.isScanning, (scanning) => {
@@ -1071,6 +1155,9 @@ onMounted(() => {
   void ssStore.loadStatus();
   void ssStore.refreshJobs();
   void ssStore.refreshLibraryTitles();
+  void ytStore.loadStatus();
+  void ytStore.refreshJobs();
+  void ytStore.refreshLibraryTitles();
 });
 </script>
 
@@ -1377,6 +1464,10 @@ onMounted(() => {
   padding: 6px 14px 0;
 }
 
+.ss-inline-error--yt {
+  color: #fca5a5;
+}
+
 /* ── Soulseek ghost rows (faded placeholders) ── */
 .ss-section-label {
   padding: 12px 16px 4px;
@@ -1400,6 +1491,13 @@ onMounted(() => {
   background: rgba(255, 255, 255, 0.03);
   border: 1px dashed rgba(255, 255, 255, 0.12);
   box-sizing: border-box;
+  overflow: hidden;
+}
+
+.yt-thumb {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .ss-ghost-progress {

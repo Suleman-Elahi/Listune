@@ -32,7 +32,8 @@ Thumbs.db
 *.iml
 
 # Go build artifacts
-server/listune-server
+listune-server-*
+server/listune-server*
 server/*.exe
 
 # Logs

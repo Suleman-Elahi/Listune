@@ -39,6 +39,10 @@ export default defineConfig((/* ctx */) => {
         // extendTsConfig (tsConfig) {}
       },
 
+      env: {
+        clientPrefix: ['QCLI_', 'VITE_'],
+      },
+
       vueRouterMode: 'hash', // available values: 'hash', 'history'
       // vueRouterBase,
       // vueDevtools,

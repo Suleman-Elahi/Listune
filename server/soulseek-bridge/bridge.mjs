@@ -31,34 +31,62 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 
-function loadDeps() {
-  try {
-    return {
-      slsk: require('slsk-client'),
-      keytar: require('keytar'),
-    };
-  } catch (err) {
-    const candidates = [
-      '/home/ilfs/.nvm/versions/node/v24.15.0/lib/node_modules/soulseek-cli/node_modules',
-      '/usr/lib/node_modules/soulseek-cli/node_modules',
-      '/usr/local/lib/node_modules/soulseek-cli/node_modules',
-    ];
-    for (const dir of candidates) {
-      try {
-        return {
-          slsk: require(path.join(dir, 'slsk-client')),
-          keytar: require(path.join(dir, 'keytar')),
-        };
-      } catch {
-        // try next
-      }
+const DEP_CANDIDATES = [
+  '/home/ilfs/.nvm/versions/node/v24.15.0/lib/node_modules/soulseek-cli/node_modules',
+  '/usr/lib/node_modules/soulseek-cli/node_modules',
+  '/usr/local/lib/node_modules/soulseek-cli/node_modules',
+];
+
+function tryRequire(name) {
+  for (const base of [null, ...DEP_CANDIDATES]) {
+    try {
+      return require(base ? path.join(base, name) : name);
+    } catch {
+      // try next location
     }
-    emit({ type: 'error', code: 'deps', message: `bridge dependencies unavailable: ${err.message}` });
+  }
+  return null;
+}
+
+function loadDeps() {
+  const slsk = tryRequire('slsk-client');
+  if (!slsk) {
+    emit({ type: 'error', code: 'deps', message: 'bridge dependencies unavailable: slsk-client' });
     process.exit(2);
   }
+  // keytar is optional: headless containers have no system keychain, so
+  // credentials can also fall back to SOULSEEK_ACCOUNT/PASSWORD or a file.
+  const keytar = tryRequire('keytar');
+  return { slsk, keytar };
 }
 
 const KEYCHAIN_SERVICE = 'soulseek-cli';
+
+const CREDENTIALS_FILE =
+  process.env.SOULSEEK_CREDENTIALS_FILE ||
+  path.join(process.env.LISTUNE_DATA_DIR || path.join(process.cwd(), 'data'), 'soulseek-credentials.json');
+
+function readFileCredentials() {
+  try {
+    const data = JSON.parse(fs.readFileSync(CREDENTIALS_FILE, 'utf8'));
+    if (data && data.account && data.password) {
+      return { account: data.account, password: data.password };
+    }
+  } catch {
+    // no saved credentials
+  }
+  return null;
+}
+
+function writeFileCredentials(account, password) {
+  fs.mkdirSync(path.dirname(CREDENTIALS_FILE), { recursive: true });
+  fs.writeFileSync(CREDENTIALS_FILE, JSON.stringify({ account, password }), { mode: 0o600 });
+  try {
+    fs.chmodSync(CREDENTIALS_FILE, 0o600);
+  } catch {
+    // best effort
+  }
+}
 
 function emit(obj) {
   process.stdout.write(JSON.stringify(obj) + '\n');
@@ -95,11 +123,17 @@ async function getCredentials(keytar) {
   if (account && password) {
     return { account, password };
   }
-  const credentials = await keytar.findCredentials(KEYCHAIN_SERVICE);
-  if (!credentials || credentials.length === 0) {
-    return null;
+  if (keytar && typeof keytar.findCredentials === 'function') {
+    try {
+      const credentials = await keytar.findCredentials(KEYCHAIN_SERVICE);
+      if (credentials && credentials.length > 0) {
+        return credentials[0];
+      }
+    } catch {
+      // No system keychain (e.g. headless container); fall back to file.
+    }
   }
-  return credentials[0];
+  return readFileCredentials();
 }
 
 // Mirrors soulseek-cli's FilterResult: free slots only, extension filter,
@@ -150,6 +184,15 @@ function safeFolderName(folder) {
 function createSession(slsk) {
   let clientPromise = null;
 
+  function connectWith(account, password) {
+    return new Promise((resolve, reject) => {
+      slsk.connect({ user: account, pass: password }, (err, client) => {
+        if (err) reject(err);
+        else resolve(client);
+      });
+    });
+  }
+
   function connect() {
     if (!clientPromise) {
       clientPromise = (async () => {
@@ -157,12 +200,7 @@ function createSession(slsk) {
         if (!credentials) {
           throw new Error('not logged in');
         }
-        return new Promise((resolve, reject) => {
-          slsk.connect({ user: credentials.account, pass: credentials.password }, (err, client) => {
-            if (err) reject(err);
-            else resolve(client);
-          });
-        });
+        return connectWith(credentials.account, credentials.password);
       })().catch((err) => {
         clientPromise = null;
         throw err;
@@ -176,27 +214,67 @@ function createSession(slsk) {
 
     async status() {
       const credentials = await getCredentials(session.keytar);
-      return {
-        type: 'status',
-        loggedIn: !!credentials,
-        account: credentials ? credentials.account : null,
-      };
+      if (!credentials) {
+        return { type: 'status', loggedIn: false, account: null };
+      }
+      // Credentials merely existing does not mean they are valid (the old
+      // login command saved them without connecting). Verify with a real
+      // connection so the UI can ask for the password again when it is wrong.
+      try {
+        await connect();
+        return { type: 'status', loggedIn: true, account: credentials.account };
+      } catch (err) {
+        return {
+          type: 'status',
+          loggedIn: false,
+          account: credentials.account,
+          error: String(err.message || err),
+        };
+      }
     },
 
     async login(account, password) {
-      await session.keytar.setPassword(KEYCHAIN_SERVICE, account, password);
+      // Authenticate before persisting: saving a typo'd password leaves the
+      // UI claiming it is connected while every search fails with INVALIDPASS.
+      const client = await connectWith(account, password);
+      clientPromise = Promise.resolve(client);
+
+      let saved = false;
+      if (session.keytar && typeof session.keytar.setPassword === 'function') {
+        try {
+          await session.keytar.setPassword(KEYCHAIN_SERVICE, account, password);
+          saved = true;
+        } catch {
+          // No system keychain; fall back to a 0600 file under the data dir.
+        }
+      }
+      if (!saved) {
+        writeFileCredentials(account, password);
+      }
       return { type: 'ok', account };
     },
 
     async search(query, mode, quality, timeoutMs) {
       const events = [];
-      const client = await connect();
-      const results = await new Promise((resolve, reject) => {
-        client.search({ req: query, timeout: timeoutMs }, (err, res) => {
-          if (err) reject(err);
-          else resolve(res || []);
+
+      function runSearch(client) {
+        return new Promise((resolve, reject) => {
+          client.search({ req: query, timeout: timeoutMs }, (err, res) => {
+            if (err) reject(err);
+            else resolve(res || []);
+          });
         });
-      });
+      }
+
+      let results = await runSearch(await connect());
+
+      // slsk-client reports a dead/stale server socket as an empty result set
+      // (its search timeout callback always resolves). Reconnect once and
+      // retry so a long-lived daemon does not silently return "no results".
+      if (results.length === 0) {
+        clientPromise = null;
+        results = await runSearch(await connect());
+      }
 
       const filtered = filterResults(results, mode, quality);
       const groups = groupByFolder(filtered);

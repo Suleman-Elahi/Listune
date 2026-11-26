@@ -1,0 +1,18 @@
+services:
+  listune:
+    build:
+      context: .
+    image: listune:local
+    container_name: listune
+    restart: unless-stopped
+    ports:
+      - "3322:3322"
+    env_file:
+      - ./server/.env
+    environment:
+      PORT: "8090"
+      LIBRARY_PATH: /app/data/library
+      FRONTEND_ORIGIN: ${PUBLIC_URL:-http://localhost:3322}
+      GOOGLE_REDIRECT_URI: ${PUBLIC_URL:-http://localhost:3322}/auth/google/callback
+    volumes:
+      - ./server/data:/app/data

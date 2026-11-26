@@ -1,0 +1,14 @@
+*
+!Dockerfile
+!listune-server-linux-amd64
+!dist
+!dist/spa
+!dist/spa/**
+!server
+!server/data
+!server/data/**
+!server/soulseek-bridge
+!server/soulseek-bridge/**
+!deploy
+!deploy/nginx.conf
+!deploy/entrypoint.sh

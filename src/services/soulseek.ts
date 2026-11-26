@@ -2,7 +2,9 @@
 // The backend shells out to the soulseek-bridge (slsk-client) for all
 // network traffic; credentials live in the system keychain.
 
-const BASE_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8090';
+const BASE_URL =
+  import.meta.env.VITE_BACKEND_URL ||
+  (import.meta.env.PROD ? self.location.origin : 'http://localhost:8090');
 
 export interface SoulseekResultFile {
   fileIndex: number;

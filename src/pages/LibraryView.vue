@@ -59,7 +59,7 @@
           size="xs"
           title="Download options"
         >
-          <q-popup-proxy transition-show="scale" transition-hide="scale">
+          <q-popup-proxy transition-show="scale" transition-hide="scale" no-focus no-refocus>
             <div class="ss-popup">
               <div class="ss-popup-title">Soulseek download options</div>
               <div class="ss-popup-label">Format</div>
@@ -77,17 +77,15 @@
                 ]"
               />
               <div class="ss-popup-label">Quality (MP3)</div>
-              <q-select
+              <select
                 v-model="optsDraft.quality"
-                dark
-                outlined
-                dense
-                emit-value
-                map-options
-                :disable="optsDraft.mode === 'flac'"
-                :options="qualityOptions"
-                style="min-width: 180px;"
-              />
+                class="ss-select"
+                :disabled="optsDraft.mode === 'flac'"
+              >
+                <option v-for="opt in qualityOptions" :key="opt.value" :value="opt.value">
+                  {{ opt.label }}
+                </option>
+              </select>
               <template v-if="!ssStore.status?.loggedIn">
                 <q-separator dark class="q-my-sm" />
                 <div class="ss-popup-label">Soulseek login</div>
@@ -617,12 +615,32 @@ const qualityOptions = [
 
 /** Draft of the persisted Soulseek options, edited in the popup. */
 const optsDraft = ref<SoulseekOpts>({ ...ssStore.opts });
-watch(() => ssStore.opts, (next) => { optsDraft.value = { ...next }; }, { immediate: true });
+watch(
+  () => ssStore.opts,
+  (next) => {
+    // Only resync when the store actually differs, otherwise saveOpts()'s
+    // fresh object would reset the draft and re-trigger the save watcher
+    // forever ("Maximum recursive updates exceeded").
+    if (next.mode === optsDraft.value.mode && next.quality === optsDraft.value.quality) return;
+    optsDraft.value = { ...next };
+  },
+  { immediate: true },
+);
 watch(optsDraft, (next) => { ssStore.saveOpts(next); }, { deep: true });
 
 const ssAccount = ref('');
 const ssPassword = ref('');
 const ssLoggingIn = ref(false);
+
+// Prefill the account so a user whose saved password stopped working only
+// has to re-enter the password.
+watch(
+  () => ssStore.status?.account,
+  (account) => {
+    if (account && !ssAccount.value) ssAccount.value = account;
+  },
+  { immediate: true },
+);
 
 function runOnlineSearch(): void {
   const q = searchQuery.value.trim();
@@ -1315,6 +1333,37 @@ onMounted(() => {
   color: rgba(255, 255, 255, 0.5);
   text-transform: uppercase;
   letter-spacing: 0.05em;
+}
+
+.ss-select {
+  width: 100%;
+  min-width: 180px;
+  appearance: none;
+  -webkit-appearance: none;
+  background-color: #151926;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='white'><path d='M7 10l5 5 5-5z'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  background-size: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  border-radius: 6px;
+  color: #fff;
+  font-size: 13px;
+  outline: none;
+  padding: 7px 30px 7px 10px;
+}
+
+.ss-select:focus {
+  border-color: #6366f1;
+}
+
+.ss-select:disabled {
+  opacity: 0.4;
+}
+
+.ss-select option {
+  background: #1e2230;
+  color: #fff;
 }
 
 .ss-popup-error {

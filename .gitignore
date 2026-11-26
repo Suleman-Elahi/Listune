@@ -17,6 +17,9 @@ server/.env
 # Google OAuth refresh tokens (never commit)
 server/data/gtokens/
 
+# Saved Soulseek credentials (never commit)
+server/data/soulseek-credentials.json
+
 # OS files
 .DS_Store
 Thumbs.db

@@ -164,7 +164,10 @@ export async function buildPresignedUrl(
 }
 
 function backendBaseUrl(): string {
-  return import.meta.env.VITE_BACKEND_URL || 'http://localhost:8090';
+  return (
+    import.meta.env.VITE_BACKEND_URL ||
+    (import.meta.env.PROD ? self.location.origin : 'http://localhost:8090')
+  );
 }
 
 /** Route a presigned URL through the backend proxy to sidestep CORS. */

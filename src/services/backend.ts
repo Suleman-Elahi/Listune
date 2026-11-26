@@ -1,7 +1,9 @@
 // Thin client for the Listune backend server.
 // All heavy logic (OAuth token exchange, AcoustID, MusicBrainz) lives server-side.
 
-const BASE_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8090';
+const BASE_URL =
+  import.meta.env.VITE_BACKEND_URL ||
+  (import.meta.env.PROD ? self.location.origin : 'http://localhost:8090');
 
 /** HTTP failure from the backend; `status` lets callers react to 401s. */
 export class BackendHttpError extends Error {

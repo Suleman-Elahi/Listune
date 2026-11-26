@@ -1,5 +1,5 @@
 // Listune Service Worker
-const CACHE_NAME = 'listune-shell-v2';
+const CACHE_NAME = 'listune-shell-v3';
 
 // Patterns that identify audio stream URLs that must never be cached
 function isAudioStreamUrl(url) {
@@ -34,7 +34,20 @@ function isCacheableRequest(request) {
   return true;
 }
 
-self.addEventListener('install', () => {
+function isNavigationRequest(request) {
+  return (
+    request.mode === 'navigate' ||
+    (request.method === 'GET' && (request.headers.get('accept') || '').includes('text/html'))
+  );
+}
+
+self.addEventListener('install', (event) => {
+  event.waitUntil(
+    caches
+      .open(CACHE_NAME)
+      .then((cache) => cache.addAll(['/', '/index.html', '/manifest.json']))
+      .catch(() => undefined)
+  );
   void self.skipWaiting();
 });
 
@@ -51,7 +64,31 @@ self.addEventListener('fetch', (event) => {
   const { request } = event;
   if (!isCacheableRequest(request)) return;
 
-  // Cache-first for app shell assets
+  // Network-first for page loads so new deployments are picked up immediately,
+  // falling back to the cached shell when offline.
+  if (isNavigationRequest(request)) {
+    event.respondWith(
+      fetch(request)
+        .then((response) => {
+          if (response && response.status === 200) {
+            const clone = response.clone();
+            caches
+              .open(CACHE_NAME)
+              .then((cache) => cache.put(request, clone))
+              .catch(() => undefined);
+          }
+          return response;
+        })
+        .catch(() =>
+          caches
+            .match(request)
+            .then((cached) => cached || caches.match('/index.html'))
+        )
+    );
+    return;
+  }
+
+  // Cache-first for hashed app-shell assets.
   event.respondWith(
     caches.match(request).then((cached) => {
       if (cached) return cached;

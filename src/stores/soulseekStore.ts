@@ -50,10 +50,15 @@ export const useSoulseekStore = defineStore('soulseek', () => {
   const opts = ref<SoulseekOpts>(loadOpts());
 
   function saveOpts(next: SoulseekOpts): void {
-    opts.value = {
-      mode: next.mode === 'flac' ? 'flac' : 'mp3',
-      quality: next.mode === 'flac' ? '' : next.quality,
-    };
+    const mode = next.mode === 'flac' ? 'flac' : 'mp3';
+    const quality = mode === 'flac' ? '' : next.quality;
+
+    // Writing a fresh object with identical values would make editors that
+    // mirror this ref back into their draft re-save forever. Only replace
+    // the ref (and hit localStorage) when something actually changed.
+    if (opts.value.mode === mode && opts.value.quality === quality) return;
+
+    opts.value = { mode, quality };
     localStorage.setItem(OPTS_KEY, JSON.stringify(opts.value));
   }
 

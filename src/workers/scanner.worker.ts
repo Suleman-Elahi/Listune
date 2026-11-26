@@ -46,7 +46,9 @@ async function putArtwork(trackId: string, blob: Blob): Promise<void> {
 
 // ── S3 ListObjectsV2 ─────────────────────────────────────────────────────────
 
-const BASE_URL = (import.meta as { env?: { VITE_BACKEND_URL?: string } }).env?.VITE_BACKEND_URL || "http://localhost:8090";
+const ENV = (import.meta as { env?: { VITE_BACKEND_URL?: string; PROD?: boolean } }).env;
+const BASE_URL =
+  ENV?.VITE_BACKEND_URL || (ENV?.PROD ? self.location.origin : "http://localhost:8090");
 
 const AUDIO_EXTENSIONS = new Set([
   '.mp3',
